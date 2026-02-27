@@ -17,12 +17,15 @@ export type OutboundHandler = (message: OutboundMessage) => Promise<void>;
 /** 进度消息回调类型 */
 export type ProgressHandler = (message: ProgressMessage) => void;
 
+/** 会话取消回调类型 */
+export type SessionCancelCallback = (sessionId: string) => void;
+
 /**
  * 消息总线
  * 
  * - 入站队列: 通道 -> 代理
  * - 出站分发: 代理 -> 通道（通过注册的 handler 分发）
- * - 会话取消: 支持按 sessionId 取消正在执行的代理循环
+ * - 会话取消: 通道通知 AgentLoop 取消指定会话的处理
  */
 export class MessageBus {
   /** 入站消息队列 */
@@ -34,8 +37,8 @@ export class MessageBus {
   /** 进度消息处理器，按通道注册 */
   private readonly progressHandlers = new Map<ChannelName, ProgressHandler>();
 
-  /** 会话级别的 AbortController，用于取消正在执行的代理循环 */
-  private readonly sessionAbortControllers = new Map<string, AbortController>();
+  /** 会话取消回调（由 AgentLoop 注册，通道触发） */
+  private sessionCancelCallback?: SessionCancelCallback;
 
   /**
    * 发布入站消息（通道调用）
@@ -131,35 +134,22 @@ export class MessageBus {
   // ─── 会话取消 ───
 
   /**
-   * 为指定会话创建 AbortSignal。
-   * AgentLoop 在处理消息前调用，用于后续检查取消状态。
+   * 注册会话取消回调。
+   * AgentLoop 在启动时注册，当通道请求取消时触发。
    */
-  createSessionAbort(sessionId: string): AbortSignal {
-    // 如果之前的还在，先清理
-    this.sessionAbortControllers.get(sessionId)?.abort();
-    const controller = new AbortController();
-    this.sessionAbortControllers.set(sessionId, controller);
-    return controller.signal;
+  onSessionCancel(callback: SessionCancelCallback): void {
+    this.sessionCancelCallback = callback;
   }
 
   /**
-   * 取消指定会话的正在执行的代理循环。
-   * 通道在客户端断开时调用。
+   * 取消指定会话的正在执行的处理。
+   * 通道在客户端断开时调用，转发给 AgentLoop 的回调。
    */
   cancelSession(sessionId: string): void {
-    const controller = this.sessionAbortControllers.get(sessionId);
-    if (controller) {
-      controller.abort();
-      this.sessionAbortControllers.delete(sessionId);
-      log.info({ sessionId }, '会话已取消');
+    if (this.sessionCancelCallback) {
+      this.sessionCancelCallback(sessionId);
     }
-  }
-
-  /**
-   * 清理指定会话的 AbortController（正常完成时调用）。
-   */
-  clearSessionAbort(sessionId: string): void {
-    this.sessionAbortControllers.delete(sessionId);
+    log.info({ sessionId }, '会话取消请求已发出');
   }
 
   /**
@@ -169,11 +159,7 @@ export class MessageBus {
     this.inboundQueue.close();
     this.outboundHandlers.clear();
     this.progressHandlers.clear();
-    // 取消所有活跃会话
-    for (const controller of this.sessionAbortControllers.values()) {
-      controller.abort();
-    }
-    this.sessionAbortControllers.clear();
+    this.sessionCancelCallback = undefined;
     log.info('消息总线已关闭');
   }
 }

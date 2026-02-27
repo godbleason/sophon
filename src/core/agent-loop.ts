@@ -3,11 +3,17 @@
  * 
  * 核心 AI 代理逻辑：
  * 1. 从 MessageBus 消费入站消息
- * 2. 构建上下文（历史、记忆、系统提示）
- * 3. 调用 LLM
- * 4. 执行工具调用（如有）
- * 5. 循环直到 LLM 不再请求工具调用
- * 6. 将最终响应发布为出站消息
+ * 2. 并发分发消息到处理管道（最多 N 条并发，同一 session 排队串行）
+ * 3. 构建上下文（历史、记忆、系统提示）
+ * 4. 调用 LLM
+ * 5. 执行工具调用（如有）
+ * 6. 循环直到 LLM 不再请求工具调用
+ * 7. 将最终响应发布为出站消息
+ * 
+ * 并发策略：
+ * - 全局最多同时处理 maxConcurrentMessages 条消息
+ * - 同一 session 同时只能处理 1 条消息，后续消息排队等待前一条完成
+ * - 支持通过 AbortSignal 取消（通道断开 / /stop 命令）
  */
 
 import { randomUUID } from 'node:crypto';
@@ -17,6 +23,7 @@ import type { AgentConfig } from '../types/config.js';
 import { MessageBus } from './message-bus.js';
 import { SessionManager } from './session-manager.js';
 import { ToolRegistry } from './tool-registry.js';
+import { Semaphore } from './semaphore.js';
 import { AgentLoopError } from './errors.js';
 import { createChildLogger } from './logger.js';
 import { setCurrentOrigin, clearCurrentOrigin } from '../tools/spawn-tool.js';
@@ -36,12 +43,19 @@ interface AgentLoopDeps {
   skillsLoader?: SkillsLoader;
 }
 
+/** 每个 session 的队列状态 */
+interface SessionQueueState {
+  /** 当前的处理链（所有排队消息的 Promise 链） */
+  chain: Promise<void>;
+  /** 所有活跃/排队的 AbortController（用于取消整个 session 的所有排队消息） */
+  abortControllers: Set<AbortController>;
+}
+
 /**
  * 代理循环
  */
 export class AgentLoop {
   private running = false;
-  private abortController: AbortController | null = null;
 
   private readonly messageBus: MessageBus;
   private readonly sessionManager: SessionManager;
@@ -51,6 +65,12 @@ export class AgentLoop {
   private readonly memoryStore?: MemoryStore;
   private readonly skillsLoader?: SkillsLoader;
 
+  /** 全局并发控制信号量 */
+  private readonly semaphore: Semaphore;
+
+  /** 每个 session 的队列状态（排队 + 处理中的消息链） */
+  private readonly sessionQueues = new Map<string, SessionQueueState>();
+
   constructor(deps: AgentLoopDeps) {
     this.messageBus = deps.messageBus;
     this.sessionManager = deps.sessionManager;
@@ -59,10 +79,21 @@ export class AgentLoop {
     this.config = deps.config;
     this.memoryStore = deps.memoryStore;
     this.skillsLoader = deps.skillsLoader;
+
+    const maxConcurrent = deps.config.maxConcurrentMessages ?? 5;
+    this.semaphore = new Semaphore(maxConcurrent);
+
+    // 注册通道取消回调：当通道请求取消某会话时，中止其所有排队/处理中的消息
+    this.messageBus.onSessionCancel((sessionId) => {
+      this.cancelSessionProcessing(sessionId);
+    });
   }
 
   /**
    * 启动代理循环
+   * 
+   * 消息派发采用 fire-and-forget 模式，不阻塞主循环。
+   * 主循环持续从队列读取消息并分发到并发处理管道。
    */
   async start(): Promise<void> {
     if (this.running) {
@@ -71,20 +102,15 @@ export class AgentLoop {
     }
 
     this.running = true;
-    this.abortController = new AbortController();
-    log.info('代理循环已启动');
+    const maxConcurrent = this.config.maxConcurrentMessages ?? 5;
+    log.info({ maxConcurrent }, '代理循环已启动（并发模式）');
 
     try {
       for await (const message of this.messageBus.inboundMessages()) {
         if (!this.running) break;
 
-        try {
-          await this.handleMessage(message);
-        } catch (err) {
-          log.error({ err, messageId: message.id }, '处理消息时发生错误');
-          // 发送错误响应给用户
-          await this.sendErrorResponse(message, err as Error);
-        }
+        // fire-and-forget：不阻塞主循环，立即继续读取下一条消息
+        this.dispatch(message);
       }
     } catch (err) {
       if (this.running) {
@@ -92,6 +118,12 @@ export class AgentLoop {
         throw new AgentLoopError('代理循环异常退出', undefined, { cause: err as Error });
       }
     } finally {
+      // 等待所有 session 的处理链完成后再退出
+      const chains = Array.from(this.sessionQueues.values()).map((s) => s.chain);
+      if (chains.length > 0) {
+        log.info({ count: chains.length }, '等待所有 session 处理链完成...');
+        await Promise.allSettled(chains);
+      }
       this.running = false;
       log.info('代理循环已停止');
     }
@@ -102,15 +134,135 @@ export class AgentLoop {
    */
   stop(): void {
     this.running = false;
-    this.abortController?.abort();
+    // 取消所有 session 的所有排队/处理中的消息
+    for (const [sessionId, state] of this.sessionQueues) {
+      for (const controller of state.abortControllers) {
+        controller.abort();
+      }
+      log.debug({ sessionId, count: state.abortControllers.size }, '已取消 session 的所有处理');
+    }
     this.messageBus.close();
     log.info('停止代理循环');
   }
 
   /**
+   * 取消指定 session 的所有排队和处理中的消息
+   */
+  private cancelSessionProcessing(sessionId: string): void {
+    const state = this.sessionQueues.get(sessionId);
+    if (state) {
+      for (const controller of state.abortControllers) {
+        controller.abort();
+      }
+      log.info(
+        { sessionId, count: state.abortControllers.size },
+        '已取消 session 的所有排队/处理中的消息',
+      );
+    }
+  }
+
+  /**
+   * 分发消息到并发处理管道
+   * 
+   * 该方法是同步的（在注册 sessionQueues 之前不会 yield），
+   * 保证同一 session 的连续消息按到达顺序串行排队。
+   * 
+   * 处理流程：
+   * 1. 同一 session 已有排队 → 新消息链到队尾（排队串行执行）
+   * 2. 不同 session → 并发执行（受全局信号量限制）
+   */
+  private dispatch(message: InboundMessage): void {
+    const { sessionId } = message;
+
+    const abortController = new AbortController();
+    const existing = this.sessionQueues.get(sessionId);
+
+    // 获取前一条消息的处理链（如果有），新消息排在其后
+    const previousChain = existing?.chain ?? Promise.resolve();
+
+    // 合并或创建 AbortController 集合
+    const abortControllers = existing?.abortControllers ?? new Set<AbortController>();
+    abortControllers.add(abortController);
+
+    if (existing) {
+      log.info(
+        { sessionId, messageId: message.id, queueDepth: abortControllers.size },
+        '同一会话有新消息到达，排入队列等待',
+      );
+    }
+
+    // 创建新的处理链：等待前一条完成 → 获取槽位 → 处理
+    const newChain = previousChain
+      .catch(() => {
+        // 忽略前一条消息的错误，保证链条不中断
+      })
+      .then(() => this.runDispatchPipeline(message, abortController))
+      .catch((err) => {
+        // 安全兜底：runDispatchPipeline 内部已处理所有错误，这里不应被触发
+        log.error({ err, sessionId, messageId: message.id }, 'dispatch pipeline 未预期的错误');
+      })
+      .finally(() => {
+        // 清理该消息的 AbortController
+        abortControllers.delete(abortController);
+        // 如果该 session 没有更多排队消息，清理 session 状态
+        if (abortControllers.size === 0) {
+          this.sessionQueues.delete(sessionId);
+        }
+      });
+
+    // 同步更新 session 状态（在任何 await 之前），保证后续同 session 消息能看到
+    this.sessionQueues.set(sessionId, {
+      chain: newChain,
+      abortControllers,
+    });
+  }
+
+  /**
+   * 单条消息的分发管道：获取槽位 → 执行处理
+   */
+  private async runDispatchPipeline(
+    message: InboundMessage,
+    abortController: AbortController,
+  ): Promise<void> {
+    const { sessionId } = message;
+
+    // 1. 如果已被取消（通道断开 / /stop 命令），直接退出
+    if (abortController.signal.aborted) {
+      log.debug({ sessionId, messageId: message.id }, '消息在排队期间已被取消，跳过处理');
+      return;
+    }
+
+    // 2. 获取并发槽位（如果所有槽位被占用则等待）
+    await this.semaphore.acquire();
+
+    try {
+      // 3. 获取槽位后再次检查取消
+      if (abortController.signal.aborted) {
+        log.debug({ sessionId, messageId: message.id }, '消息在获取槽位后已被取消，跳过处理');
+        return;
+      }
+
+      // 4. 执行消息处理
+      await this.processMessage(message, abortController.signal);
+    } catch (err) {
+      // 如果是取消导致的，不算错误
+      if (abortController.signal.aborted) {
+        log.debug({ sessionId, messageId: message.id }, '消息处理被取消');
+        return;
+      }
+      log.error({ err, messageId: message.id, sessionId }, '处理消息时发生错误');
+      await this.sendErrorResponse(message, err as Error).catch((sendErr) => {
+        log.error({ err: sendErr, sessionId }, '发送错误响应失败');
+      });
+    } finally {
+      this.semaphore.release();
+    }
+  }
+
+  /**
    * 处理单条入站消息
    */
-  private async handleMessage(message: InboundMessage): Promise<void> {
+  private async processMessage(message: InboundMessage, abortSignal: AbortSignal): Promise<void> {
     const { sessionId, text, channel } = message;
 
     // 处理特殊命令
@@ -120,9 +272,6 @@ export class AgentLoop {
     }
 
     log.info({ sessionId, channel, textLength: text.length }, '处理消息');
-
-    // 创建会话级别的取消信号
-    const abortSignal = this.messageBus.createSessionAbort(sessionId);
 
     try {
       // 设置子代理来源上下文（让 SpawnTool 知道当前消息来源）
@@ -154,8 +303,6 @@ export class AgentLoop {
     } finally {
       // 清理子代理来源上下文
       clearCurrentOrigin();
-      // 清理 AbortController
-      this.messageBus.clearSessionAbort(sessionId);
     }
   }
 
@@ -206,7 +353,7 @@ export class AgentLoop {
    * LLM 循环：调用 LLM -> 执行工具 -> 再调用 LLM，直到完成
    * 
    * 每一步都会通过 emitProgress 向通道推送实时进度。
-   * 支持通过 AbortSignal 取消（客户端断开时自动取消）。
+   * 支持通过 AbortSignal 取消（通道断开 / /stop 命令）。
    */
   private async runLLMLoop(
     sessionId: string,
@@ -371,18 +518,29 @@ export class AgentLoop {
         break;
 
       case '/stop':
+        this.cancelSessionProcessing(sessionId);
         response = '⏹️ 已停止当前任务';
         break;
 
       case '/status': {
         const sessions = this.sessionManager.listSessions();
         const tools = this.toolRegistry.listTools();
+        const maxConcurrent = this.config.maxConcurrentMessages ?? 5;
+        const activeSessionCount = this.sessionQueues.size;
+        let totalQueued = 0;
+        for (const state of this.sessionQueues.values()) {
+          totalQueued += state.abortControllers.size;
+        }
         response = [
           '📊 状态信息:',
           `  模型: ${this.config.model}`,
           `  活跃会话: ${sessions.length}`,
           `  已注册工具: ${tools.length}`,
           `  提供商: ${this.provider.name}`,
+          `  处理中的 session: ${activeSessionCount}`,
+          `  排队/处理中消息总数: ${totalQueued}`,
+          `  并发上限: ${maxConcurrent}`,
+          `  信号量可用: ${this.semaphore.available}/${this.semaphore.max}`,
         ].join('\n');
         break;
       }

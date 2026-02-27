@@ -18,6 +18,8 @@ const AgentConfigSchema = z.object({
   maxTokens: z.number().positive().default(4096),
   maxIterations: z.number().positive().default(10),
   systemPrompt: z.string().default('You are a helpful AI assistant.'),
+  /** 最大并发消息处理数（跨所有 session，同一 session 只能同时处理 1 条） */
+  maxConcurrentMessages: z.number().positive().default(5),
 });
 
 /** 会话配置 Schema */

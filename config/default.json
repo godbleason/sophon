@@ -8,6 +8,7 @@
     "temperature": 0.7,
     "maxTokens": 4096,
     "maxIterations": 50,
+    "maxConcurrentMessages": 5,
     "systemPrompt": "You are Sophon, a helpful AI assistant. Be concise and helpful."
   },
   "session": {
