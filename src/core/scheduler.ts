@@ -46,6 +46,8 @@ export interface ScheduledTask {
   lastRunAt?: number;
   /** 累计执行次数 */
   runCount: number;
+  /** 创建者用户 ID（用于触发时恢复用户上下文） */
+  creatorUserId?: string;
 }
 
 /** 持久化格式（每个 session 一个文件） */
@@ -115,6 +117,7 @@ export class Scheduler {
     cronExpression: string;
     description: string;
     taskPrompt: string;
+    creatorUserId?: string;
   }): Promise<ScheduledTask> {
     // 校验 cron 表达式
     try {
@@ -140,6 +143,7 @@ export class Scheduler {
       enabled: true,
       createdAt: Date.now(),
       runCount: 0,
+      creatorUserId: params.creatorUserId,
     };
 
     this.tasks.set(task.id, task);
@@ -273,7 +277,10 @@ export class Scheduler {
       text: prefix + task.taskPrompt,
       sender: 'scheduler',
       timestamp: Date.now(),
-      metadata: { scheduledTaskId: task.id },
+      metadata: {
+        scheduledTaskId: task.id,
+        creatorUserId: task.creatorUserId,
+      },
     });
   }
 

@@ -277,15 +277,46 @@ export class AgentLoop {
 
     // 解析用户身份并关联到会话（在命令处理之前，确保 /link 等命令可以获取当前用户）
     if (this.userStore) {
-      const senderName = (message.metadata?.['displayName'] as string | undefined)
-        || (message.metadata?.['username'] as string | undefined);
-      const user = await this.userStore.getOrCreateByChannel(
-        channel,
-        message.sender,
-        senderName,
-      );
-      this.sessionManager.setSessionUser(sessionId, user.id);
-      log.debug({ sessionId, userId: user.id, userName: user.name }, '会话已关联用户');
+      const isScheduledTask = !!message.metadata?.['scheduledTaskId'];
+
+      if (isScheduledTask) {
+        // 定时任务触发：恢复创建者的用户上下文，
+        // 不要用 sender='scheduler' 创建新用户覆盖
+        const existingUserId = this.sessionManager.getSessionUserId(sessionId);
+        const creatorUserId = message.metadata?.['creatorUserId'] as string | undefined;
+
+        if (existingUserId) {
+          // session 内存中仍有用户关联（未重启过），直接复用
+          log.debug(
+            { sessionId, userId: existingUserId },
+            '定时任务触发，保留原有用户关联',
+          );
+        } else if (creatorUserId) {
+          // 服务重启后 session 从磁盘恢复丢失了 userId，
+          // 通过任务中持久化的 creatorUserId 恢复
+          this.sessionManager.setSessionUser(sessionId, creatorUserId);
+          log.info(
+            { sessionId, userId: creatorUserId },
+            '定时任务触发，从任务元数据恢复用户关联',
+          );
+        } else {
+          log.warn(
+            { sessionId },
+            '定时任务触发但无法确定创建者用户 ID，可能导致上下文缺失',
+          );
+        }
+      } else {
+        // 正常消息：解析发送者身份
+        const senderName = (message.metadata?.['displayName'] as string | undefined)
+          || (message.metadata?.['username'] as string | undefined);
+        const user = await this.userStore.getOrCreateByChannel(
+          channel,
+          message.sender,
+          senderName,
+        );
+        this.sessionManager.setSessionUser(sessionId, user.id);
+        log.debug({ sessionId, userId: user.id, userName: user.name }, '会话已关联用户');
+      }
     }
 
     // 处理特殊命令

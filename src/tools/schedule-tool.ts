@@ -68,6 +68,7 @@ export class CreateScheduleTool implements Tool {
         cronExpression,
         description,
         taskPrompt,
+        creatorUserId: context.userId,
       });
 
       const info = scheduler.getTaskInfo(task.id);
