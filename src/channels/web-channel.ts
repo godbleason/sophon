@@ -280,7 +280,11 @@ export class WebChannel implements Channel {
   /**
    * 构建前端可显示的历史消息列表
    * 
-   * 只提取 user 和 assistant 角色的消息，跳过 system/tool 等内部消息。
+   * 只提取 user 和「最终」assistant 消息，跳过：
+   * - system / tool 等内部消息
+   * - 内容为空的消息
+   * - 带 toolCalls 的 assistant 消息（中间态，LLM 思考后调用工具）
+   * 
    * 限制最多返回最近 50 条，避免前端一次性渲染过多。
    */
   private buildClientHistory(sessionId: string): Array<{ role: string; content: string }> {
@@ -290,14 +294,16 @@ export class WebChannel implements Channel {
     const displayMessages: Array<{ role: string; content: string }> = [];
 
     for (const msg of messages) {
-      if (msg.role === 'user' || msg.role === 'assistant') {
-        // 跳过内容为空的消息（比如只有 tool_calls 的 assistant 消息）
+      if (msg.role === 'user') {
         if (typeof msg.content === 'string' && msg.content.trim().length > 0) {
-          displayMessages.push({
-            role: msg.role,
-            content: msg.content,
-          });
+          displayMessages.push({ role: 'user', content: msg.content });
         }
+      } else if (msg.role === 'assistant') {
+        // 跳过带 toolCalls 的中间态消息（LLM 思考后调工具，非最终回复）
+        if (msg.toolCalls && msg.toolCalls.length > 0) continue;
+        // 跳过空内容
+        if (typeof msg.content !== 'string' || msg.content.trim().length === 0) continue;
+        displayMessages.push({ role: 'assistant', content: msg.content });
       }
     }
 

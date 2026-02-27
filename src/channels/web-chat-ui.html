@@ -354,6 +354,52 @@
       animation: fadeIn 0.2s ease-out;
     }
 
+    /* 折叠头部（思考完成后显示） */
+    .progress-header {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      font-size: 13px;
+      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.15s;
+    }
+
+    .progress-header:hover {
+      color: var(--text-secondary);
+      border-color: var(--accent);
+    }
+
+    .progress-header .chevron {
+      display: inline-block;
+      transition: transform 0.2s;
+      font-size: 10px;
+    }
+
+    .progress-group.collapsed .progress-header {
+      display: flex;
+    }
+
+    .progress-group.collapsed .progress-header .chevron {
+      transform: rotate(0deg);
+    }
+
+    .progress-group.expanded .progress-header {
+      display: flex;
+      border-bottom-left-radius: 0;
+      border-bottom-right-radius: 0;
+      border-bottom: none;
+    }
+
+    .progress-group.expanded .progress-header .chevron {
+      transform: rotate(90deg);
+    }
+
     .progress-steps {
       display: flex;
       flex-direction: column;
@@ -364,6 +410,33 @@
       border-radius: 12px;
       font-size: 13px;
       color: var(--text-secondary);
+      max-height: 300px;
+      overflow-y: auto;
+      transition: max-height 0.3s ease;
+    }
+
+    .progress-steps::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .progress-steps::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .progress-steps::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 2px;
+    }
+
+    /* 折叠状态：隐藏步骤内容 */
+    .progress-group.collapsed .progress-steps {
+      display: none;
+    }
+
+    /* 展开状态：步骤显示并衔接头部圆角 */
+    .progress-group.expanded .progress-steps {
+      border-top-left-radius: 0;
+      border-top-right-radius: 0;
     }
 
     .progress-step {
@@ -564,16 +637,43 @@
     }
 
     // === 进度展示 ===
+    let progressStepCount = 0; // 当前进度组的步骤计数
+
     function ensureProgressGroup() {
       if (!currentProgressEl) {
+        progressStepCount = 0;
+
         currentProgressEl = document.createElement('div');
         currentProgressEl.className = 'progress-group';
+
+        // 折叠头部（初始隐藏，完成后显示）
+        const headerEl = document.createElement('div');
+        headerEl.className = 'progress-header';
+        headerEl.innerHTML = '<span class="chevron">▶</span><span class="progress-summary">🧠 思考过程</span>';
+        headerEl.addEventListener('click', () => {
+          toggleProgressGroup(currentProgressEl || headerEl.parentElement);
+        });
+        currentProgressEl.appendChild(headerEl);
+
+        // 步骤内容区
         const stepsEl = document.createElement('div');
         stepsEl.className = 'progress-steps';
         currentProgressEl.appendChild(stepsEl);
+
         messagesEl.insertBefore(currentProgressEl, typingIndicator);
       }
       return currentProgressEl.querySelector('.progress-steps');
+    }
+
+    function toggleProgressGroup(groupEl) {
+      if (!groupEl) return;
+      if (groupEl.classList.contains('collapsed')) {
+        groupEl.classList.remove('collapsed');
+        groupEl.classList.add('expanded');
+      } else if (groupEl.classList.contains('expanded')) {
+        groupEl.classList.remove('expanded');
+        groupEl.classList.add('collapsed');
+      }
     }
 
     function handleProgress(data) {
@@ -590,12 +690,14 @@
 
       switch (data.step) {
         case 'thinking': {
+          progressStepCount++;
           const step = createStepEl('⏳', '正在思考...');
           step.classList.add('active');
           stepsEl.appendChild(step);
           break;
         }
         case 'tool_call': {
+          progressStepCount++;
           const argsStr = data.toolArgs ? JSON.stringify(data.toolArgs, null, 2) : '';
           const textEl = document.createElement('span');
           textEl.className = 'progress-step-text';
@@ -627,12 +729,16 @@
         }
         case 'llm_response': {
           if (data.content) {
+            progressStepCount++;
             const step = createStepEl('💬', data.content);
             stepsEl.appendChild(step);
           }
           break;
         }
       }
+
+      // 思考过程中，始终滚动到底部
+      stepsEl.scrollTop = stepsEl.scrollHeight;
       scrollToBottom();
     }
 
@@ -664,7 +770,42 @@
           const icon = el.querySelector('.progress-step-icon');
           if (icon && icon.textContent === '⏳') icon.textContent = '✅';
         });
+
+        // 统计工具调用数量用于摘要
+        const toolSteps = currentProgressEl.querySelectorAll('.progress-step [data-tool-call-id]').length
+          || currentProgressEl.querySelectorAll('.progress-step').length;
+        const summaryEl = currentProgressEl.querySelector('.progress-summary');
+        if (summaryEl) {
+          const toolCalls = currentProgressEl.querySelectorAll('[data-tool-call-id]');
+          const toolCount = toolCalls.length;
+          if (toolCount > 0) {
+            // 收集工具名称
+            const toolNames = [];
+            toolCalls.forEach(el => {
+              const nameEl = el.querySelector('.tool-name');
+              if (nameEl) toolNames.push(nameEl.textContent);
+            });
+            const uniqueNames = [...new Set(toolNames)];
+            summaryEl.textContent = '🧠 思考过程 · ' + toolCount + ' 次工具调用'
+              + (uniqueNames.length > 0 ? ' (' + uniqueNames.join(', ') + ')' : '');
+          } else {
+            summaryEl.textContent = '🧠 思考过程 · ' + progressStepCount + ' 步';
+          }
+        }
+
+        // 自动折叠
+        currentProgressEl.classList.add('collapsed');
+
+        // 解除引用前保存给 header 的点击事件用
+        const savedGroup = currentProgressEl;
+        const headerEl = savedGroup.querySelector('.progress-header');
+        if (headerEl) {
+          // 重新绑定，确保闭包引用正确的 group
+          headerEl.onclick = () => toggleProgressGroup(savedGroup);
+        }
+
         currentProgressEl = null;
+        progressStepCount = 0;
       }
     }
 
