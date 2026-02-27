@@ -14,11 +14,13 @@ import { SubagentManager } from './subagent-manager.js';
 import { createProvider } from '../providers/provider-factory.js';
 import { CLIChannel } from '../channels/cli-channel.js';
 import { WebChannel } from '../channels/web-channel.js';
+import { TelegramChannel } from '../channels/telegram-channel.js';
 import { getBuiltinTools } from '../tools/index.js';
 import { setScheduler } from '../tools/schedule-tool.js';
 import { setSubagentManager } from '../tools/spawn-tool.js';
 import { MemoryStore } from '../memory/memory-store.js';
 import { SkillsLoader } from '../skills/skills-loader.js';
+import { UserStore } from './user-store.js';
 import { setLogLevel, createChildLogger } from './logger.js';
 import { ConfigError } from './errors.js';
 
@@ -37,6 +39,7 @@ export class SophonApp {
   private readonly skillsLoader: SkillsLoader;
   private readonly scheduler: Scheduler;
   private readonly subagentManager: SubagentManager;
+  private readonly userStore: UserStore;
   private readonly agentLoop: AgentLoop;
   private readonly channels: Channel[] = [];
 
@@ -54,6 +57,7 @@ export class SophonApp {
     this.toolRegistry = new ToolRegistry();
     this.memoryStore = new MemoryStore(config.memory);
     this.skillsLoader = new SkillsLoader(config.skillsDir);
+    this.userStore = new UserStore({ storageDir: config.session.storageDir });
 
     // 初始化定时任务调度器
     this.scheduler = new Scheduler(config.scheduler, this.messageBus, this.sessionManager);
@@ -86,6 +90,7 @@ export class SophonApp {
       config: config.agent,
       memoryStore: this.memoryStore,
       skillsLoader: this.skillsLoader,
+      userStore: this.userStore,
     });
 
     // 初始化通道
@@ -99,6 +104,10 @@ export class SophonApp {
    */
   async start(): Promise<void> {
     log.info('启动 Sophon...');
+
+    // 初始化用户系统
+    await this.userStore.init();
+    log.info({ userCount: this.userStore.size }, '用户系统已初始化');
 
     // 加载技能
     try {
@@ -151,6 +160,10 @@ export class SophonApp {
       this.channels.map((ch) => ch.stop()),
     );
 
+    // 保存用户数据
+    await this.userStore.save();
+    log.info('用户数据已保存');
+
     log.info('Sophon 已停止');
   }
 
@@ -202,7 +215,22 @@ export class SophonApp {
       log.info({ port: channels.web.port }, 'Web 通道已配置');
     }
 
-    // TODO: 其他通道（Telegram, Discord 等）
+    // Telegram 通道
+    if (channels.telegram.enabled) {
+      if (!channels.telegram.token) {
+        throw new ConfigError('Telegram 通道已启用但未配置 token，请设置 TELEGRAM_BOT_TOKEN 环境变量或在配置文件中添加 channels.telegram.token');
+      }
+      this.channels.push(
+        new TelegramChannel({
+          messageBus: this.messageBus,
+          token: channels.telegram.token,
+          allowedUsers: channels.telegram.allowedUsers,
+        }),
+      );
+      log.info('Telegram 通道已配置');
+    }
+
+    // TODO: 其他通道（Discord 等）
 
     if (this.channels.length === 0) {
       throw new ConfigError('没有启用任何通道，请至少启用一个通道');

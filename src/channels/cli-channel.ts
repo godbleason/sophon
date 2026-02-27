@@ -71,6 +71,9 @@ export class CLIChannel implements Channel {
         text,
         sender: 'cli-user',
         timestamp: Date.now(),
+        metadata: {
+          displayName: 'CLI User',
+        },
       });
     });
 

@@ -158,11 +158,16 @@ export abstract class OpenAICompatibleProvider implements LLMProvider {
 
     // 解析工具调用
     const toolCalls: ToolCall[] = (choice.message.tool_calls ?? []).map((tc) => {
-      let args: Record<string, unknown> = {};
+      let args: Record<string, unknown>;
       try {
         args = JSON.parse(tc.function.arguments) as Record<string, unknown>;
-      } catch {
-        this.log.warn({ toolCallId: tc.id, rawArgs: tc.function.arguments }, '工具调用参数解析失败');
+      } catch (err) {
+        throw new ProviderError(
+          this.providerName,
+          `工具调用参数解析失败: toolCallId=${tc.id}, function=${tc.function.name}`,
+          { toolCallId: tc.id, rawArgs: tc.function.arguments },
+          { cause: err as Error },
+        );
       }
 
       return {

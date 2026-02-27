@@ -127,7 +127,7 @@ export class MessageBus {
       await handler(message);
     } catch (err) {
       log.error({ err, channel: message.channel, messageId: message.id }, '出站消息处理失败');
-      throw err;
+      // 不再 re-throw，避免通道层的发送失败导致 AgentLoop 崩溃
     }
   }
 

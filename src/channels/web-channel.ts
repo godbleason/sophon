@@ -155,6 +155,9 @@ export class WebChannel implements Channel {
             text,
             sender: clientId,
             timestamp: Date.now(),
+            metadata: {
+              displayName: `Web User (${sessionId})`,
+            },
           });
         }
       } catch (err) {

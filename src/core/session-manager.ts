@@ -27,6 +27,8 @@ interface SessionMeta {
   updatedAt: number;
   channel: string;
   messageCount: number;
+  /** 关联的用户 ID */
+  userId?: string;
 }
 
 /** 会话数据 */
@@ -83,6 +85,43 @@ export class SessionManager {
     this.sessions.set(sessionId, session);
     log.info({ sessionId, sessionDir }, '已创建新会话');
     return session;
+  }
+
+  /**
+   * 为会话关联用户
+   */
+  setSessionUser(sessionId: string, userId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.meta.userId = userId;
+    }
+  }
+
+  /**
+   * 获取会话关联的用户 ID
+   */
+  getSessionUserId(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.meta.userId;
+  }
+
+  /**
+   * 将某个用户的所有 session 迁移到另一个用户
+   * 用于用户合并场景
+   *
+   * @returns 被迁移的 session 数量
+   */
+  migrateSessionsUser(fromUserId: string, toUserId: string): number {
+    let count = 0;
+    for (const session of this.sessions.values()) {
+      if (session.meta.userId === fromUserId) {
+        session.meta.userId = toUserId;
+        count++;
+      }
+    }
+    if (count > 0) {
+      log.info({ fromUserId, toUserId, count }, '已迁移 session 用户关联');
+    }
+    return count;
   }
 
   /**

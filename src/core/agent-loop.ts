@@ -29,6 +29,7 @@ import { createChildLogger } from './logger.js';
 import { setCurrentOrigin, clearCurrentOrigin } from '../tools/spawn-tool.js';
 import type { MemoryStore } from '../memory/memory-store.js';
 import type { SkillsLoader } from '../skills/skills-loader.js';
+import type { UserStore } from './user-store.js';
 
 const log = createChildLogger('AgentLoop');
 
@@ -41,6 +42,7 @@ interface AgentLoopDeps {
   config: AgentConfig;
   memoryStore?: MemoryStore;
   skillsLoader?: SkillsLoader;
+  userStore?: UserStore;
 }
 
 /** 每个 session 的队列状态 */
@@ -64,6 +66,7 @@ export class AgentLoop {
   private readonly config: AgentConfig;
   private readonly memoryStore?: MemoryStore;
   private readonly skillsLoader?: SkillsLoader;
+  private readonly userStore?: UserStore;
 
   /** 全局并发控制信号量 */
   private readonly semaphore: Semaphore;
@@ -79,6 +82,7 @@ export class AgentLoop {
     this.config = deps.config;
     this.memoryStore = deps.memoryStore;
     this.skillsLoader = deps.skillsLoader;
+    this.userStore = deps.userStore;
 
     const maxConcurrent = deps.config.maxConcurrentMessages ?? 5;
     this.semaphore = new Semaphore(maxConcurrent);
@@ -265,6 +269,22 @@ export class AgentLoop {
   private async processMessage(message: InboundMessage, abortSignal: AbortSignal): Promise<void> {
     const { sessionId, text, channel } = message;
 
+    // 确保会话已创建（必须在用户关联和命令处理之前）
+    await this.sessionManager.getOrCreate(sessionId, channel);
+
+    // 解析用户身份并关联到会话（在命令处理之前，确保 /link 等命令可以获取当前用户）
+    if (this.userStore) {
+      const senderName = (message.metadata?.['displayName'] as string | undefined)
+        || (message.metadata?.['username'] as string | undefined);
+      const user = await this.userStore.getOrCreateByChannel(
+        channel,
+        message.sender,
+        senderName,
+      );
+      this.sessionManager.setSessionUser(sessionId, user.id);
+      log.debug({ sessionId, userId: user.id, userName: user.name }, '会话已关联用户');
+    }
+
     // 处理特殊命令
     if (text.startsWith('/')) {
       await this.handleCommand(message);
@@ -277,12 +297,9 @@ export class AgentLoop {
       // 设置子代理来源上下文（让 SpawnTool 知道当前消息来源）
       setCurrentOrigin({ sessionId, channel });
 
-      // 获取或创建会话
-      const session = await this.sessionManager.getOrCreate(sessionId, channel);
-
       // 添加用户消息到会话
       const userMessage: ChatMessage = { role: 'user', content: text };
-      await this.sessionManager.addMessage(session.meta.id, userMessage);
+      await this.sessionManager.addMessage(sessionId, userMessage);
 
       // 获取历史消息
       const history = this.sessionManager.getHistory(sessionId);
@@ -499,7 +516,9 @@ export class AgentLoop {
    */
   private async handleCommand(message: InboundMessage): Promise<void> {
     const { text, channel, sessionId } = message;
-    const command = text.trim().toLowerCase();
+    const parts = text.trim().split(/\s+/);
+    const command = parts[0]!.toLowerCase();
+    const args = parts.slice(1);
 
     let response: string;
 
@@ -545,6 +564,18 @@ export class AgentLoop {
         break;
       }
 
+      case '/link':
+        response = await this.handleLinkCommand(message, args);
+        break;
+
+      case '/whoami':
+        response = this.handleWhoamiCommand(message);
+        break;
+
+      case '/unlink':
+        response = await this.handleUnlinkCommand(message);
+        break;
+
       default:
         response = `❓ 未知命令: ${command}\n使用 /help 查看可用命令`;
         break;
@@ -563,11 +594,170 @@ export class AgentLoop {
   private getHelpText(): string {
     return [
       '📖 可用命令:',
-      '  /help   - 显示此帮助信息',
-      '  /clear  - 清除当前会话',
-      '  /tools  - 列出可用工具',
-      '  /status - 显示状态信息',
-      '  /stop   - 停止当前任务',
+      '  /help         - 显示此帮助信息',
+      '  /clear        - 清除当前会话',
+      '  /tools        - 列出可用工具',
+      '  /status       - 显示状态信息',
+      '  /stop         - 停止当前任务',
+      '  /whoami       - 查看当前用户身份',
+      '  /link         - 生成跨通道关联码',
+      '  /link <code>  - 使用关联码绑定到另一个通道的用户',
+      '  /unlink       - 解绑当前通道（需有多个通道绑定）',
+    ].join('\n');
+  }
+
+  /**
+   * 处理 /link 命令
+   *
+   * 流程：
+   * 1. /link（无参数）→ 生成链接码，用户在另一个通道输入
+   * 2. /link <code> → 用链接码将当前通道身份合并到另一个通道的用户
+   */
+  private async handleLinkCommand(message: InboundMessage, args: string[]): Promise<string> {
+    if (!this.userStore) {
+      return '❌ 用户系统未启用';
+    }
+
+    const userId = this.sessionManager.getSessionUserId(message.sessionId);
+    if (!userId) {
+      return '❌ 无法识别当前用户';
+    }
+
+    const user = this.userStore.getById(userId);
+    if (!user) {
+      return '❌ 用户数据异常';
+    }
+
+    // 无参数：生成链接码
+    if (args.length === 0) {
+      const code = this.userStore.generateLinkCode(userId);
+      return [
+        '🔗 跨通道关联码已生成：',
+        '',
+        `  📌  ${code}`,
+        '',
+        '请在另一个通道中发送以下命令完成关联：',
+        `  /link ${code}`,
+        '',
+        '⏱️ 此关联码 5 分钟内有效。',
+      ].join('\n');
+    }
+
+    // 有参数：使用链接码进行合并
+    const code = args[0]!;
+    const result = await this.userStore.redeemLinkCode(code, userId);
+
+    if (!result) {
+      return '❌ 关联码无效或已过期，请重新生成。';
+    }
+
+    // 迁移 session 关联
+    this.sessionManager.migrateSessionsUser(result.mergedUserId, result.primaryUser.id);
+
+    const bindingList = result.primaryUser.channelBindings
+      .map((b) => `  - ${b.channel}: ${b.channelUserId}`)
+      .join('\n');
+
+    return [
+      '✅ 通道关联成功！',
+      '',
+      `👤 统一用户: ${result.primaryUser.name}`,
+      `📎 已绑定通道:`,
+      bindingList,
+    ].join('\n');
+  }
+
+  /**
+   * 处理 /whoami 命令 — 显示当前用户身份信息
+   */
+  private handleWhoamiCommand(message: InboundMessage): string {
+    if (!this.userStore) {
+      return '❌ 用户系统未启用';
+    }
+
+    const userId = this.sessionManager.getSessionUserId(message.sessionId);
+    if (!userId) {
+      return '❌ 无法识别当前用户';
+    }
+
+    const user = this.userStore.getById(userId);
+    if (!user) {
+      return '❌ 用户数据异常';
+    }
+
+    const bindingList = user.channelBindings
+      .map((b) => `  - ${b.channel}: ${b.channelUserId}`)
+      .join('\n');
+
+    return [
+      '👤 当前用户信息:',
+      `  ID: ${user.id}`,
+      `  名称: ${user.name}`,
+      `  创建时间: ${new Date(user.createdAt).toLocaleString()}`,
+      `  最后活跃: ${new Date(user.lastActiveAt).toLocaleString()}`,
+      '',
+      '📎 已绑定通道:',
+      bindingList,
+      '',
+      `📝 当前通道: ${message.channel}`,
+      `📝 当前会话: ${message.sessionId}`,
+    ].join('\n');
+  }
+
+  /**
+   * 处理 /unlink 命令 — 解绑当前通道
+   *
+   * 将当前通道的身份从用户上移除，解绑后当前通道会被视为新用户。
+   * 约束：至少保留一个通道绑定，不允许解绑最后一个。
+   */
+  private async handleUnlinkCommand(message: InboundMessage): Promise<string> {
+    if (!this.userStore) {
+      return '❌ 用户系统未启用';
+    }
+
+    const userId = this.sessionManager.getSessionUserId(message.sessionId);
+    if (!userId) {
+      return '❌ 无法识别当前用户';
+    }
+
+    const user = this.userStore.getById(userId);
+    if (!user) {
+      return '❌ 用户数据异常';
+    }
+
+    // 检查绑定数量
+    if (user.channelBindings.length <= 1) {
+      return '❌ 当前用户只有一个通道绑定，无法解绑。只有通过 /link 关联了多个通道后才能使用 /unlink。';
+    }
+
+    // 找到当前通道的绑定
+    const currentBinding = user.channelBindings.find(
+      (b) => b.channel === message.channel && b.channelUserId === message.sender,
+    );
+
+    if (!currentBinding) {
+      return '❌ 未找到当前通道的绑定信息';
+    }
+
+    // 执行解绑
+    await this.userStore.unbindChannel(userId, message.channel, message.sender);
+
+    // 清除当前 session 的用户关联（下次发消息会自动创建新用户）
+    this.sessionManager.setSessionUser(message.sessionId, '');
+
+    const remainingBindings = user.channelBindings
+      .map((b) => `  - ${b.channel}: ${b.channelUserId}`)
+      .join('\n');
+
+    return [
+      '✅ 已解绑当前通道',
+      '',
+      `📎 已解绑: ${message.channel}:${message.sender}`,
+      '',
+      `👤 原用户 (${user.name}) 剩余绑定:`,
+      remainingBindings,
+      '',
+      '下次发送消息时，当前通道将被分配为新用户。',
     ].join('\n');
   }
 

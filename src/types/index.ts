@@ -42,3 +42,9 @@ export type {
   SchedulerConfig,
   SubagentConfig,
 } from './config.js';
+
+export type {
+  User,
+  ChannelBinding,
+  UserStoreConfig,
+} from './user.js';
