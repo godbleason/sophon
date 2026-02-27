@@ -307,15 +307,15 @@ export class AgentLoop {
         }
       } else {
         // 正常消息：解析发送者身份
-        const senderName = (message.metadata?.['displayName'] as string | undefined)
-          || (message.metadata?.['username'] as string | undefined);
-        const user = await this.userStore.getOrCreateByChannel(
-          channel,
-          message.sender,
-          senderName,
-        );
-        this.sessionManager.setSessionUser(sessionId, user.id);
-        log.debug({ sessionId, userId: user.id, userName: user.name }, '会话已关联用户');
+      const senderName = (message.metadata?.['displayName'] as string | undefined)
+        || (message.metadata?.['username'] as string | undefined);
+      const user = await this.userStore.getOrCreateByChannel(
+        channel,
+        message.sender,
+        senderName,
+      );
+      this.sessionManager.setSessionUser(sessionId, user.id);
+      log.debug({ sessionId, userId: user.id, userName: user.name }, '会话已关联用户');
       }
     }
 
@@ -327,25 +327,25 @@ export class AgentLoop {
 
     log.info({ sessionId, channel, textLength: text.length }, '处理消息');
 
-    // 添加用户消息到会话
-    const userMessage: ChatMessage = { role: 'user', content: text };
-    await this.sessionManager.addMessage(sessionId, userMessage);
+      // 添加用户消息到会话
+      const userMessage: ChatMessage = { role: 'user', content: text };
+      await this.sessionManager.addMessage(sessionId, userMessage);
 
-    // 获取历史消息
-    const history = this.sessionManager.getHistory(sessionId);
+      // 获取历史消息
+      const history = this.sessionManager.getHistory(sessionId);
 
-    // 执行 LLM 循环（可能包含多轮工具调用）
-    const response = await this.runLLMLoop(sessionId, channel, history, abortSignal);
+      // 执行 LLM 循环（可能包含多轮工具调用）
+      const response = await this.runLLMLoop(sessionId, channel, history, abortSignal);
 
-    // 发送响应（仅在未取消时发送）
-    if (!abortSignal.aborted) {
-      await this.messageBus.publishOutbound({
-        id: randomUUID(),
-        channel,
-        sessionId,
-        text: response,
-        timestamp: Date.now(),
-      });
+      // 发送响应（仅在未取消时发送）
+      if (!abortSignal.aborted) {
+        await this.messageBus.publishOutbound({
+          id: randomUUID(),
+          channel,
+          sessionId,
+          text: response,
+          timestamp: Date.now(),
+        });
     }
   }
 

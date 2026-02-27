@@ -211,7 +211,7 @@ export class WebChannel implements Channel {
       clearTimeout(identifyTimeout);
       this.clients.delete(connId);
       if (client.identified && client.sessionId) {
-        // 取消该会话正在执行的代理循环，避免资源浪费
+      // 取消该会话正在执行的代理循环，避免资源浪费
         this.messageBus.cancelSession(client.sessionId);
         log.info({ clientId: client.clientId, sessionId: client.sessionId }, '客户端已断开，会话已取消');
       }

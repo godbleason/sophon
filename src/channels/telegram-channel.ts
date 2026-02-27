@@ -135,10 +135,23 @@ export class TelegramChannel implements Channel {
             '/start - 开始对话\n' +
             '/help - 显示帮助\n' +
             '/reset - 重置会话\n' +
+            '/clear - 清除当前会话\n' +
+            '/tools - 列出可用工具\n' +
+            '/status - 显示状态信息\n' +
+            '/stop - 停止当前任务\n' +
             '/whoami - 查看当前用户身份\n' +
             '/link - 生成跨通道关联码\n' +
-            '/link [code] - 使用关联码绑定通道\n' +
-            '/unlink - 解绑当前通道',
+            '/link <code> - 使用关联码绑定通道\n' +
+            '/unlink - 解绑当前通道\n\n' +
+            '🏠 Space 命令：\n' +
+            '/space create <名称> - 创建一个新 Space\n' +
+            '/space list - 查看我加入的所有 Space\n' +
+            '/space info <名称或ID> - 查看 Space 详情\n' +
+            '/space invite <名称或ID> - 生成邀请码\n' +
+            '/space join <邀请码> - 通过邀请码加入 Space\n' +
+            '/space leave <名称或ID> - 离开一个 Space\n' +
+            '/space nick <名称或ID> <昵称> - 设置昵称\n' +
+            '/space members <名称或ID> - 查看成员',
         );
         return;
       }
