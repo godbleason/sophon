@@ -48,3 +48,11 @@ export type {
   ChannelBinding,
   UserStoreConfig,
 } from './user.js';
+
+export type {
+  SpaceRole,
+  SpaceMember,
+  Space,
+  SpaceInvite,
+  SpaceManagerConfig,
+} from './space.js';

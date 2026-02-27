@@ -21,6 +21,7 @@ import { setSubagentManager } from '../tools/spawn-tool.js';
 import { MemoryStore } from '../memory/memory-store.js';
 import { SkillsLoader } from '../skills/skills-loader.js';
 import { UserStore } from './user-store.js';
+import { SpaceManager } from './space-manager.js';
 import { setLogLevel, createChildLogger } from './logger.js';
 import { ConfigError } from './errors.js';
 
@@ -40,6 +41,7 @@ export class SophonApp {
   private readonly scheduler: Scheduler;
   private readonly subagentManager: SubagentManager;
   private readonly userStore: UserStore;
+  private readonly spaceManager: SpaceManager;
   private readonly agentLoop: AgentLoop;
   private readonly channels: Channel[] = [];
 
@@ -58,6 +60,7 @@ export class SophonApp {
     this.memoryStore = new MemoryStore(config.memory);
     this.skillsLoader = new SkillsLoader(config.skillsDir);
     this.userStore = new UserStore({ storageDir: config.session.storageDir });
+    this.spaceManager = new SpaceManager({ storageDir: config.session.storageDir });
 
     // 初始化定时任务调度器
     this.scheduler = new Scheduler(config.scheduler, this.messageBus, this.sessionManager);
@@ -91,6 +94,7 @@ export class SophonApp {
       memoryStore: this.memoryStore,
       skillsLoader: this.skillsLoader,
       userStore: this.userStore,
+      spaceManager: this.spaceManager,
     });
 
     // 初始化通道
@@ -108,6 +112,10 @@ export class SophonApp {
     // 初始化用户系统
     await this.userStore.init();
     log.info({ userCount: this.userStore.size }, '用户系统已初始化');
+
+    // 初始化 Space 系统
+    await this.spaceManager.init();
+    log.info({ spaceCount: this.spaceManager.size }, 'Space 系统已初始化');
 
     // 加载技能
     try {
@@ -163,6 +171,10 @@ export class SophonApp {
     // 保存用户数据
     await this.userStore.save();
     log.info('用户数据已保存');
+
+    // 保存 Space 数据
+    await this.spaceManager.save();
+    log.info('Space 数据已保存');
 
     log.info('Sophon 已停止');
   }

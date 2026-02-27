@@ -30,6 +30,7 @@ import { setCurrentOrigin, clearCurrentOrigin } from '../tools/spawn-tool.js';
 import type { MemoryStore } from '../memory/memory-store.js';
 import type { SkillsLoader } from '../skills/skills-loader.js';
 import type { UserStore } from './user-store.js';
+import type { SpaceManager } from './space-manager.js';
 
 const log = createChildLogger('AgentLoop');
 
@@ -43,6 +44,7 @@ interface AgentLoopDeps {
   memoryStore?: MemoryStore;
   skillsLoader?: SkillsLoader;
   userStore?: UserStore;
+  spaceManager?: SpaceManager;
 }
 
 /** 每个 session 的队列状态 */
@@ -67,6 +69,7 @@ export class AgentLoop {
   private readonly memoryStore?: MemoryStore;
   private readonly skillsLoader?: SkillsLoader;
   private readonly userStore?: UserStore;
+  private readonly spaceManager?: SpaceManager;
 
   /** 全局并发控制信号量 */
   private readonly semaphore: Semaphore;
@@ -83,6 +86,7 @@ export class AgentLoop {
     this.memoryStore = deps.memoryStore;
     this.skillsLoader = deps.skillsLoader;
     this.userStore = deps.userStore;
+    this.spaceManager = deps.spaceManager;
 
     const maxConcurrent = deps.config.maxConcurrentMessages ?? 5;
     this.semaphore = new Semaphore(maxConcurrent);
@@ -342,9 +346,15 @@ export class AgentLoop {
   }
 
   /**
-   * 构建增强的系统提示（包含记忆和技能上下文）
+   * 构建增强的系统提示（包含记忆、技能和 Space 上下文）
+   *
+   * Space 上下文会将用户所属的所有 Space 及其成员信息注入系统提示，
+   * AI 通过成员的姓名和昵称自动识别对话涉及哪个 Space。
+   * 例如「提醒爷爷1小时后吃药」→ AI 识别「爷爷」属于「家庭」Space。
+   *
+   * @param userId 当前用户 ID
    */
-  private async buildSystemPrompt(): Promise<string> {
+  private async buildSystemPrompt(userId?: string): Promise<string> {
     let prompt = this.config.systemPrompt;
 
     // 注入记忆上下文
@@ -360,6 +370,29 @@ export class AgentLoop {
       const skillsContext = this.skillsLoader.getSkillsForPrompt();
       if (skillsContext) {
         prompt += skillsContext;
+      }
+    }
+
+    // 注入用户的全量 Space 上下文
+    if (userId && this.spaceManager && this.userStore) {
+      // 收集所有相关用户的名称
+      const spaces = this.spaceManager.listUserSpaces(userId);
+      if (spaces.length > 0) {
+        const userNames = new Map<string, string>();
+        for (const space of spaces) {
+          for (const member of space.members) {
+            if (!userNames.has(member.userId)) {
+              const user = this.userStore.getById(member.userId);
+              if (user) {
+                userNames.set(member.userId, user.name);
+              }
+            }
+          }
+        }
+        const spaceContext = this.spaceManager.buildAllSpacesContext(userId, userNames);
+        if (spaceContext) {
+          prompt += spaceContext;
+        }
       }
     }
 
@@ -381,8 +414,9 @@ export class AgentLoop {
     const messages = [...history];
     let iterations = 0;
 
-    // 构建增强的系统提示
-    const systemPrompt = await this.buildSystemPrompt();
+    // 构建增强的系统提示（含 Space 上下文，基于用户级别）
+    const userId = this.sessionManager.getSessionUserId(sessionId);
+    const systemPrompt = await this.buildSystemPrompt(userId);
 
     while (iterations < this.config.maxIterations) {
       iterations++;
@@ -576,6 +610,10 @@ export class AgentLoop {
         response = await this.handleUnlinkCommand(message);
         break;
 
+      case '/space':
+        response = await this.handleSpaceCommand(message, args);
+        break;
+
       default:
         response = `❓ 未知命令: ${command}\n使用 /help 查看可用命令`;
         break;
@@ -594,15 +632,25 @@ export class AgentLoop {
   private getHelpText(): string {
     return [
       '📖 可用命令:',
-      '  /help         - 显示此帮助信息',
-      '  /clear        - 清除当前会话',
-      '  /tools        - 列出可用工具',
-      '  /status       - 显示状态信息',
-      '  /stop         - 停止当前任务',
-      '  /whoami       - 查看当前用户身份',
-      '  /link         - 生成跨通道关联码',
-      '  /link <code>  - 使用关联码绑定到另一个通道的用户',
-      '  /unlink       - 解绑当前通道（需有多个通道绑定）',
+      '  /help                      - 显示此帮助信息',
+      '  /clear                     - 清除当前会话',
+      '  /tools                     - 列出可用工具',
+      '  /status                    - 显示状态信息',
+      '  /stop                      - 停止当前任务',
+      '  /whoami                    - 查看当前用户身份',
+      '  /link                      - 生成跨通道关联码',
+      '  /link <code>               - 使用关联码绑定到另一个通道的用户',
+      '  /unlink                    - 解绑当前通道（需有多个通道绑定）',
+      '',
+      '🏠 Space 命令:',
+      '  /space create <名称>            - 创建一个新 Space',
+      '  /space list                     - 查看我加入的所有 Space',
+      '  /space info <名称或ID>          - 查看 Space 详情',
+      '  /space invite <名称或ID>        - 生成邀请码',
+      '  /space join <邀请码>             - 通过邀请码加入 Space',
+      '  /space leave <名称或ID>         - 离开一个 Space',
+      '  /space nick <名称或ID> <昵称>   - 设置在某个 Space 中的昵称',
+      '  /space members <名称或ID>       - 查看 Space 成员',
     ].join('\n');
   }
 
@@ -689,7 +737,7 @@ export class AgentLoop {
       .map((b) => `  - ${b.channel}: ${b.channelUserId}`)
       .join('\n');
 
-    return [
+    const lines = [
       '👤 当前用户信息:',
       `  ID: ${user.id}`,
       `  名称: ${user.name}`,
@@ -698,10 +746,30 @@ export class AgentLoop {
       '',
       '📎 已绑定通道:',
       bindingList,
-      '',
-      `📝 当前通道: ${message.channel}`,
-      `📝 当前会话: ${message.sessionId}`,
-    ].join('\n');
+    ];
+
+    // 显示 Space 信息
+    if (this.spaceManager) {
+      const spaces = this.spaceManager.listUserSpaces(userId);
+      if (spaces.length > 0) {
+        lines.push('');
+        lines.push(`🏠 已加入 Space (${spaces.length} 个):`);
+        for (const space of spaces) {
+          const member = space.members.find((m) => m.userId === userId);
+          const roleIcon = member?.role === 'owner' ? '👑' : member?.role === 'admin' ? '⭐' : '👤';
+          const nickname = member?.nickname ? ` (${member.nickname})` : '';
+          lines.push(`  ${roleIcon} ${space.name}${nickname}`);
+        }
+      }
+
+    
+    }
+
+    lines.push('');
+    lines.push(`📝 当前通道: ${message.channel}`);
+    lines.push(`📝 当前会话: ${message.sessionId}`);
+
+    return lines.join('\n');
   }
 
   /**
@@ -759,6 +827,344 @@ export class AgentLoop {
       '',
       '下次发送消息时，当前通道将被分配为新用户。',
     ].join('\n');
+  }
+
+  // ─── Space 命令处理 ───
+
+  /**
+   * 处理 /space 命令
+   *
+   * 子命令：
+   * - create <name> [--nick <nickname>] — 创建 Space
+   * - list — 列出我加入的 Space
+   * - info <name|id> — 查看 Space 详情
+   * - invite <name|id> — 生成邀请码
+   * - join <code> [--nick <nickname>] — 通过邀请码加入 Space
+   * - leave <name|id> — 离开 Space
+   * - nick <space> <nickname> — 设置在某个 Space 中的昵称
+   * - members <name|id> — 查看 Space 的成员列表
+   */
+  private async handleSpaceCommand(message: InboundMessage, args: string[]): Promise<string> {
+    if (!this.spaceManager || !this.userStore) {
+      return '❌ Space 系统未启用';
+    }
+
+    const userId = this.sessionManager.getSessionUserId(message.sessionId);
+    if (!userId) {
+      return '❌ 无法识别当前用户';
+    }
+
+    if (args.length === 0) {
+      // 显示 Space 概览
+      const spaces = this.spaceManager.listUserSpaces(userId);
+      const lines = ['🏠 Space 系统'];
+      lines.push(`📊 已加入 ${spaces.length} 个 Space`);
+
+      if (spaces.length > 0) {
+        lines.push('');
+        for (const space of spaces) {
+          const member = space.members.find((m) => m.userId === userId);
+          const roleIcon = member?.role === 'owner' ? '👑' : member?.role === 'admin' ? '⭐' : '👤';
+          lines.push(`  ${roleIcon} ${space.name} — ${space.members.length} 人`);
+        }
+      }
+
+      lines.push('');
+      lines.push('使用 /help 查看所有 Space 命令');
+      return lines.join('\n');
+    }
+
+    const subCommand = args[0]!.toLowerCase();
+    const subArgs = args.slice(1);
+
+    switch (subCommand) {
+      case 'create':
+        return this.handleSpaceCreate(userId, subArgs);
+
+      case 'list':
+        return this.handleSpaceList(userId);
+
+      case 'info':
+        return this.handleSpaceInfo(userId, subArgs);
+
+      case 'invite':
+        return this.handleSpaceInvite(userId, subArgs);
+
+      case 'join':
+        return this.handleSpaceJoin(userId, subArgs);
+
+      case 'leave':
+        return this.handleSpaceLeave(userId, subArgs);
+
+      case 'nick':
+        return this.handleSpaceNick(userId, subArgs);
+
+      case 'members':
+        return this.handleSpaceMembers(userId, subArgs);
+
+      default:
+        return `❓ 未知的 Space 子命令: ${subCommand}\n使用 /help 查看所有 Space 命令`;
+    }
+  }
+
+  /** /space create <name> [--nick <nickname>] */
+  private async handleSpaceCreate(userId: string, args: string[]): Promise<string> {
+    if (args.length === 0) {
+      return '❌ 请提供 Space 名称。用法: /space create <名称> [--nick <昵称>]';
+    }
+
+    // 解析参数：找 --nick
+    const nickIdx = args.indexOf('--nick');
+    let nickname: string | undefined;
+    let nameParts: string[];
+
+    if (nickIdx !== -1) {
+      nameParts = args.slice(0, nickIdx);
+      nickname = args.slice(nickIdx + 1).join(' ') || undefined;
+    } else {
+      nameParts = args;
+    }
+
+    const name = nameParts.join(' ');
+    if (!name) {
+      return '❌ Space 名称不能为空';
+    }
+
+    const space = await this.spaceManager!.createSpace(name, userId, undefined, nickname);
+
+    return [
+      '✅ Space 创建成功！',
+      '',
+      `🏠 名称: ${space.name}`,
+      `🆔 ID: ${space.id}`,
+      nickname ? `👤 你的昵称: ${nickname}` : '',
+      '',
+      '你可以使用以下命令邀请成员：',
+      `  /space invite ${space.name}`,
+    ].filter(Boolean).join('\n');
+  }
+
+  /** /space list */
+  private handleSpaceList(userId: string): string {
+    const spaces = this.spaceManager!.listUserSpaces(userId);
+    if (spaces.length === 0) {
+      return [
+        '📋 你还没有加入任何 Space',
+        '',
+        '创建一个新 Space：/space create <名称>',
+        '通过邀请码加入：/space join <邀请码>',
+      ].join('\n');
+    }
+
+    const lines = [`📋 我的 Space (${spaces.length} 个)：`, ''];
+    for (const space of spaces) {
+      const member = space.members.find((m) => m.userId === userId);
+      const role = member?.role === 'owner' ? '👑' : member?.role === 'admin' ? '⭐' : '👤';
+      const memberCount = space.members.length;
+      const nickname = member?.nickname ? ` (${member.nickname})` : '';
+      lines.push(`  ${role} ${space.name}${nickname} — ${memberCount} 人`);
+      lines.push(`     ID: ${space.id.substring(0, 8)}...`);
+    }
+
+    return lines.join('\n');
+  }
+
+  /** /space info <name|id> */
+  private handleSpaceInfo(userId: string, args: string[]): string {
+    if (args.length === 0) {
+      return '❌ 请提供 Space 名称或 ID。用法: /space info <名称或ID>';
+    }
+
+    const query = args.join(' ');
+    const space = this.resolveSpace(userId, query);
+
+    if (!space) {
+      return `❌ 未找到 Space: ${query}`;
+    }
+
+    const memberLines = space.members.map((m) => {
+      const user = this.userStore!.getById(m.userId);
+      const name = user?.name || '未知用户';
+      const nickname = m.nickname ? ` (${m.nickname})` : '';
+      const roleIcon = m.role === 'owner' ? '👑' : m.role === 'admin' ? '⭐' : '👤';
+      return `  ${roleIcon} ${name}${nickname}`;
+    });
+
+    return [
+      `🏠 Space: ${space.name}`,
+      `🆔 ID: ${space.id}`,
+      space.description ? `📝 描述: ${space.description}` : '',
+      `📅 创建时间: ${new Date(space.createdAt).toLocaleString()}`,
+      `🔄 更新时间: ${new Date(space.updatedAt).toLocaleString()}`,
+      '',
+      `👥 成员 (${space.members.length} 人):`,
+      ...memberLines,
+    ].filter(Boolean).join('\n');
+  }
+
+  /** /space invite <name|id> */
+  private handleSpaceInvite(userId: string, args: string[]): string {
+    if (args.length === 0) {
+      return '❌ 请提供 Space 名称或 ID。用法: /space invite <名称或ID>';
+    }
+
+    const query = args.join(' ');
+    const space = this.resolveSpace(userId, query);
+    if (!space) {
+      return `❌ 未找到 Space: ${query}`;
+    }
+
+    try {
+      const code = this.spaceManager!.generateInviteCode(space.id, userId);
+      return [
+        `🔗 Space「${space.name}」邀请码已生成：`,
+        '',
+        `  📌  ${code}`,
+        '',
+        '请将以下命令发送给要邀请的人：',
+        `  /space join ${code}`,
+        '',
+        '⏱️ 此邀请码 24 小时内有效。',
+      ].join('\n');
+    } catch (err) {
+      return `❌ ${(err as Error).message}`;
+    }
+  }
+
+  /** /space join <code> [--nick <nickname>] */
+  private async handleSpaceJoin(userId: string, args: string[]): Promise<string> {
+    if (args.length === 0) {
+      return '❌ 请提供邀请码。用法: /space join <邀请码> [--nick <昵称>]';
+    }
+
+    const code = args[0]!;
+
+    // 解析 --nick
+    const nickIdx = args.indexOf('--nick');
+    let nickname: string | undefined;
+    if (nickIdx !== -1) {
+      nickname = args.slice(nickIdx + 1).join(' ') || undefined;
+    }
+
+    const space = await this.spaceManager!.joinByInviteCode(code, userId, nickname);
+
+    if (!space) {
+      return '❌ 邀请码无效或已过期，请联系 Space 管理员重新生成。';
+    }
+
+    // 检查是否已经是成员（邀请码方法会返回 Space）
+    const member = space.members.find((m) => m.userId === userId);
+    if (member && member.joinedAt < Date.now() - 1000) {
+      return `ℹ️ 你已经是 Space「${space.name}」的成员了。`;
+    }
+
+    const memberLines = space.members.map((m) => {
+      const user = this.userStore!.getById(m.userId);
+      const name = user?.name || '未知用户';
+      const nick = m.nickname ? ` (${m.nickname})` : '';
+      return `  - ${name}${nick}`;
+    });
+
+    return [
+      `✅ 已成功加入 Space「${space.name}」！`,
+      nickname ? `👤 你的昵称: ${nickname}` : '',
+      '',
+      `👥 当前成员 (${space.members.length} 人):`,
+      ...memberLines,
+    ].filter(Boolean).join('\n');
+  }
+
+  /** /space leave <name|id> */
+  private async handleSpaceLeave(userId: string, args: string[]): Promise<string> {
+    if (args.length === 0) {
+      return '❌ 请提供 Space 名称或 ID。用法: /space leave <名称或ID>';
+    }
+
+    const query = args.join(' ');
+    const space = this.resolveSpace(userId, query);
+
+    if (!space) {
+      return `❌ 未找到 Space: ${query}`;
+    }
+
+    try {
+      await this.spaceManager!.leaveSpace(space.id, userId);
+      return `✅ 已离开 Space「${space.name}」`;
+    } catch (err) {
+      return `❌ ${(err as Error).message}`;
+    }
+  }
+
+  /** /space nick <space-name> <nickname> */
+  private async handleSpaceNick(userId: string, args: string[]): Promise<string> {
+    if (args.length < 2) {
+      return '❌ 用法: /space nick <Space名称或ID> <昵称>';
+    }
+
+    // 第一个参数是 Space 名称/ID，剩余的是昵称
+    const spaceQuery = args[0]!;
+    const nickname = args.slice(1).join(' ');
+
+    const space = this.resolveSpace(userId, spaceQuery);
+    if (!space) {
+      return `❌ 未找到 Space: ${spaceQuery}`;
+    }
+
+    try {
+      await this.spaceManager!.setMemberNickname(space.id, userId, nickname);
+      return `✅ 你在 Space「${space.name}」中的昵称已设置为: ${nickname}`;
+    } catch (err) {
+      return `❌ ${(err as Error).message}`;
+    }
+  }
+
+  /** /space members <name|id> */
+  private handleSpaceMembers(userId: string, args: string[]): string {
+    if (args.length === 0) {
+      return '❌ 请提供 Space 名称或 ID。用法: /space members <名称或ID>';
+    }
+
+    const query = args.join(' ');
+    const space = this.resolveSpace(userId, query);
+
+    if (!space) {
+      return `❌ 未找到 Space: ${query}`;
+    }
+
+    const memberLines = space.members.map((m) => {
+      const user = this.userStore!.getById(m.userId);
+      const name = user?.name || '未知用户';
+      const nickname = m.nickname ? `「${m.nickname}」` : '';
+      const roleIcon = m.role === 'owner' ? '👑' : m.role === 'admin' ? '⭐' : '👤';
+      const isMe = m.userId === userId ? ' ← 你' : '';
+      return `  ${roleIcon} ${name} ${nickname}${isMe}`;
+    });
+
+    return [
+      `👥 Space「${space.name}」成员 (${space.members.length} 人):`,
+      '',
+      ...memberLines,
+    ].join('\n');
+  }
+
+  /**
+   * 辅助方法：通过名称或 ID 解析 Space
+   *
+   * 查找逻辑：
+   * 1. 精确匹配 Space ID
+   * 2. 在用户所属 Space 中按名称模糊匹配
+   */
+  private resolveSpace(userId: string, query: string): import('../types/space.js').Space | undefined {
+    if (!this.spaceManager) return undefined;
+
+    // 先尝试按 ID 精确匹配
+    const byId = this.spaceManager.getById(query);
+    if (byId && this.spaceManager.isMember(byId.id, userId)) {
+      return byId;
+    }
+
+    // 再尝试按名称匹配
+    return this.spaceManager.findByName(userId, query);
   }
 
   /** 工具列表文本 */
