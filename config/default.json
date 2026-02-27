@@ -1,0 +1,33 @@
+{
+  "providers": {
+    "deepseek": {},
+    "openrouter": {}
+  },
+  "agent": {
+    "model": "deepseek-chat",
+    "temperature": 0.7,
+    "maxTokens": 4096,
+    "maxIterations": 10,
+    "systemPrompt": "You are Sophon, a helpful AI assistant. Be concise and helpful."
+  },
+  "session": {
+    "storageDir": "data/sessions",
+    "memoryWindow": 50
+  },
+  "memory": {
+    "storageDir": "data/memory",
+    "enabled": true
+  },
+  "channels": {
+    "cli": {
+      "enabled": true,
+      "prompt": "you> "
+    },
+    "web": {
+      "enabled": true,
+      "port": 3000,
+      "host": "localhost"
+    }
+  },
+  "logLevel": "info"
+}

@@ -1,0 +1,225 @@
+/**
+ * 配置管理器
+ * 
+ * 加载 .env 文件、JSON 配置文件，应用环境变量覆盖，并使用 Zod 进行运行时验证。
+ * 
+ * 加载顺序（优先级从低到高）：
+ * 1. JSON 配置文件（config/default.json）
+ * 2. .env 文件中的环境变量
+ * 3. 系统环境变量
+ */
+
+import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { config as dotenvConfig } from 'dotenv';
+import { ConfigSchema, type Config } from '../types/config.js';
+import { ConfigError } from '../core/errors.js';
+import { createChildLogger } from '../core/logger.js';
+
+const log = createChildLogger('ConfigManager');
+
+/** 默认配置文件路径列表（按优先级从高到低） */
+const DEFAULT_CONFIG_PATHS = [
+  'config/config.json',
+  'config/default.json',
+  'sophon.config.json',
+];
+
+/**
+ * 从文件加载原始 JSON 配置
+ */
+async function loadConfigFile(configPath: string): Promise<Record<string, unknown>> {
+  const absolutePath = resolve(configPath);
+
+  if (!existsSync(absolutePath)) {
+    throw new ConfigError(`配置文件不存在: ${absolutePath}`, { path: absolutePath });
+  }
+
+  try {
+    const content = await readFile(absolutePath, 'utf-8');
+    return JSON.parse(content) as Record<string, unknown>;
+  } catch (err) {
+    throw new ConfigError(
+      `配置文件解析失败: ${absolutePath}`,
+      { path: absolutePath },
+      { cause: err as Error },
+    );
+  }
+}
+
+/**
+ * 加载 .env 文件并注入到 process.env
+ * 
+ * 使用 dotenv 库，默认不覆盖已有的环境变量。
+ * 同时支持 .env.local 作为本地覆盖。
+ */
+function loadEnvFile(): void {
+  // .env.local 优先级更高，先加载
+  const localResult = dotenvConfig({ path: resolve('.env.local') });
+  if (localResult.parsed) {
+    log.info({ count: Object.keys(localResult.parsed).length }, '已加载 .env.local');
+  }
+
+  const result = dotenvConfig({ path: resolve('.env') });
+  if (result.parsed) {
+    log.info({ count: Object.keys(result.parsed).length }, '已加载 .env');
+  }
+
+  if (result.error && localResult.error) {
+    log.debug('未找到 .env 文件，跳过');
+  }
+}
+
+/**
+ * 从环境变量中提取配置覆盖
+ * 
+ * 支持以下环境变量:
+ * - SOPHON_LOG_LEVEL: 日志级别
+ * - SOPHON_MODEL: 默认模型
+ * - SOPHON_TEMPERATURE: 温度
+ * - OPENAI_API_KEY: OpenAI API Key
+ * - OPENAI_API_BASE: OpenAI API Base URL
+ * - OPENROUTER_API_KEY: OpenRouter API Key
+ * - DEEPSEEK_API_KEY: DeepSeek API Key
+ * - ANTHROPIC_API_KEY: Anthropic API Key
+ * - TELEGRAM_BOT_TOKEN: Telegram Bot Token
+ * - DISCORD_BOT_TOKEN: Discord Bot Token
+ */
+function getEnvOverrides(): Record<string, unknown> {
+  const overrides: Record<string, unknown> = {};
+
+  // 日志级别
+  if (process.env['SOPHON_LOG_LEVEL']) {
+    overrides['logLevel'] = process.env['SOPHON_LOG_LEVEL'];
+  }
+
+  // 代理配置
+  const agent: Record<string, unknown> = {};
+  if (process.env['SOPHON_MODEL']) {
+    agent['model'] = process.env['SOPHON_MODEL'];
+  }
+  if (process.env['SOPHON_TEMPERATURE']) {
+    agent['temperature'] = parseFloat(process.env['SOPHON_TEMPERATURE']);
+  }
+  if (Object.keys(agent).length > 0) {
+    overrides['agent'] = agent;
+  }
+
+  // 提供商 API Key
+  const providers: Record<string, Record<string, string>> = {};
+  if (process.env['OPENAI_API_KEY']) {
+    providers['openai'] = { ...providers['openai'], apiKey: process.env['OPENAI_API_KEY'] };
+  }
+  if (process.env['OPENAI_API_BASE']) {
+    providers['openai'] = { ...providers['openai'], apiBase: process.env['OPENAI_API_BASE'] };
+  }
+  if (process.env['OPENROUTER_API_KEY']) {
+    providers['openrouter'] = { apiKey: process.env['OPENROUTER_API_KEY'] };
+  }
+  if (process.env['DEEPSEEK_API_KEY']) {
+    providers['deepseek'] = { apiKey: process.env['DEEPSEEK_API_KEY'] };
+  }
+  if (process.env['ANTHROPIC_API_KEY']) {
+    providers['anthropic'] = { apiKey: process.env['ANTHROPIC_API_KEY'] };
+  }
+  if (Object.keys(providers).length > 0) {
+    overrides['providers'] = providers;
+  }
+
+  // 通道 Token
+  const channels: Record<string, unknown> = {};
+  if (process.env['TELEGRAM_BOT_TOKEN']) {
+    channels['telegram'] = { enabled: true, token: process.env['TELEGRAM_BOT_TOKEN'] };
+  }
+  if (process.env['DISCORD_BOT_TOKEN']) {
+    channels['discord'] = { enabled: true, token: process.env['DISCORD_BOT_TOKEN'] };
+  }
+  if (Object.keys(channels).length > 0) {
+    overrides['channels'] = channels;
+  }
+
+  return overrides;
+}
+
+/**
+ * 深度合并两个对象
+ */
+function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...target };
+
+  for (const key of Object.keys(source)) {
+    const sourceVal = source[key];
+    const targetVal = result[key];
+
+    if (
+      sourceVal !== null &&
+      typeof sourceVal === 'object' &&
+      !Array.isArray(sourceVal) &&
+      targetVal !== null &&
+      typeof targetVal === 'object' &&
+      !Array.isArray(targetVal)
+    ) {
+      result[key] = deepMerge(
+        targetVal as Record<string, unknown>,
+        sourceVal as Record<string, unknown>,
+      );
+    } else {
+      result[key] = sourceVal;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 加载并验证配置
+ * 
+ * 1. 尝试从指定路径或默认路径加载配置文件
+ * 2. 应用环境变量覆盖
+ * 3. 使用 Zod Schema 验证
+ */
+export async function loadConfig(configPath?: string): Promise<Config> {
+  // 首先加载 .env 文件
+  loadEnvFile();
+
+  let rawConfig: Record<string, unknown> = {};
+
+  if (configPath) {
+    // 明确指定了配置文件路径
+    rawConfig = await loadConfigFile(configPath);
+    log.info({ path: configPath }, '已加载配置文件');
+  } else {
+    // 尝试从默认路径加载
+    for (const defaultPath of DEFAULT_CONFIG_PATHS) {
+      const absolutePath = resolve(defaultPath);
+      if (existsSync(absolutePath)) {
+        rawConfig = await loadConfigFile(absolutePath);
+        log.info({ path: absolutePath }, '已加载配置文件');
+        break;
+      }
+    }
+
+    if (Object.keys(rawConfig).length === 0) {
+      log.info('未找到配置文件，使用默认配置');
+    }
+  }
+
+  // 应用环境变量覆盖
+  const envOverrides = getEnvOverrides();
+  if (Object.keys(envOverrides).length > 0) {
+    rawConfig = deepMerge(rawConfig, envOverrides);
+    log.debug({ overrides: Object.keys(envOverrides) }, '已应用环境变量覆盖');
+  }
+
+  // Zod 验证
+  const parseResult = ConfigSchema.safeParse(rawConfig);
+  if (!parseResult.success) {
+    const errors = parseResult.error.issues.map(
+      (issue) => `${issue.path.join('.')}: ${issue.message}`,
+    );
+    throw new ConfigError('配置验证失败', { errors });
+  }
+
+  return parseResult.data;
+}

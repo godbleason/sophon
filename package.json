@@ -1,0 +1,36 @@
+{
+  "name": "sophon",
+  "version": "0.1.0",
+  "description": "轻量级个人 AI 助手框架",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "sophon": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "dotenv": "^17.3.1",
+    "pino": "^9.5.0",
+    "pino-pretty": "^13.0.0",
+    "ws": "^8.19.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
