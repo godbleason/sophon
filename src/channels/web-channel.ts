@@ -9,7 +9,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { ChannelName, OutboundMessage } from '../types/message.js';
+import type { ChannelName, OutboundMessage, ProgressMessage } from '../types/message.js';
 import type { MessageBus } from '../core/message-bus.js';
 import type { Channel } from './base-channel.js';
 import { createChildLogger } from '../core/logger.js';
@@ -54,6 +54,9 @@ export class WebChannel implements Channel {
     // 注册出站消息处理器
     this.messageBus.registerOutboundHandler('web', this.handleOutbound.bind(this));
 
+    // 注册进度消息处理器
+    this.messageBus.registerProgressHandler('web', this.handleProgress.bind(this));
+
     // 创建 HTTP 服务器
     this.httpServer = createServer(this.handleHttpRequest.bind(this));
 
@@ -94,6 +97,7 @@ export class WebChannel implements Channel {
     }
 
     this.messageBus.removeOutboundHandler('web');
+    this.messageBus.removeProgressHandler('web');
     log.info('Web 通道已停止');
   }
 
@@ -160,12 +164,15 @@ export class WebChannel implements Channel {
 
     ws.on('close', () => {
       this.clients.delete(clientId);
-      log.info({ clientId }, '客户端已断开');
+      // 取消该会话正在执行的代理循环，避免资源浪费
+      this.messageBus.cancelSession(sessionId);
+      log.info({ clientId, sessionId }, '客户端已断开，会话已取消');
     });
 
     ws.on('error', (err: Error) => {
       log.error({ err, clientId }, 'WebSocket 错误');
       this.clients.delete(clientId);
+      this.messageBus.cancelSession(sessionId);
     });
   }
 
@@ -188,6 +195,30 @@ export class WebChannel implements Channel {
     }
 
     log.warn({ sessionId }, '未找到对应的客户端连接');
+  }
+
+  /**
+   * 处理进度消息（推送 Agent 每一步过程到前端）
+   */
+  private handleProgress(message: ProgressMessage): void {
+    const { sessionId } = message;
+
+    for (const client of this.clients.values()) {
+      if (client.sessionId === sessionId) {
+        this.sendToClient(client.ws, {
+          type: 'progress',
+          step: message.step,
+          iteration: message.iteration,
+          toolName: message.toolName,
+          toolArgs: message.toolArgs,
+          toolCallId: message.toolCallId,
+          content: message.content,
+          isError: message.isError,
+          timestamp: message.timestamp,
+        });
+        return;
+      }
+    }
   }
 
   /**

@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { LLMProvider } from '../types/provider.js';
-import type { ChatMessage, ToolCall, InboundMessage } from '../types/message.js';
+import type { ChatMessage, InboundMessage, ProgressMessage, ChannelName } from '../types/message.js';
 import type { AgentConfig } from '../types/config.js';
 import { MessageBus } from './message-bus.js';
 import { SessionManager } from './session-manager.js';
@@ -31,7 +31,6 @@ interface AgentLoopDeps {
   toolRegistry: ToolRegistry;
   provider: LLMProvider;
   config: AgentConfig;
-  workspaceDir: string;
   memoryStore?: MemoryStore;
   skillsLoader?: SkillsLoader;
 }
@@ -48,7 +47,6 @@ export class AgentLoop {
   private readonly toolRegistry: ToolRegistry;
   private readonly provider: LLMProvider;
   private readonly config: AgentConfig;
-  private readonly workspaceDir: string;
   private readonly memoryStore?: MemoryStore;
   private readonly skillsLoader?: SkillsLoader;
 
@@ -58,7 +56,6 @@ export class AgentLoop {
     this.toolRegistry = deps.toolRegistry;
     this.provider = deps.provider;
     this.config = deps.config;
-    this.workspaceDir = deps.workspaceDir;
     this.memoryStore = deps.memoryStore;
     this.skillsLoader = deps.skillsLoader;
   }
@@ -123,27 +120,55 @@ export class AgentLoop {
 
     log.info({ sessionId, channel, textLength: text.length }, '处理消息');
 
-    // 获取或创建会话
-    const session = await this.sessionManager.getOrCreate(sessionId, channel);
+    // 创建会话级别的取消信号
+    const abortSignal = this.messageBus.createSessionAbort(sessionId);
 
-    // 添加用户消息到会话
-    const userMessage: ChatMessage = { role: 'user', content: text };
-    await this.sessionManager.addMessage(session.meta.id, userMessage);
+    try {
+      // 获取或创建会话
+      const session = await this.sessionManager.getOrCreate(sessionId, channel);
 
-    // 获取历史消息
-    const history = this.sessionManager.getHistory(sessionId);
+      // 添加用户消息到会话
+      const userMessage: ChatMessage = { role: 'user', content: text };
+      await this.sessionManager.addMessage(session.meta.id, userMessage);
 
-    // 执行 LLM 循环（可能包含多轮工具调用）
-    const response = await this.runLLMLoop(sessionId, history);
+      // 获取历史消息
+      const history = this.sessionManager.getHistory(sessionId);
 
-    // 发送响应
-    await this.messageBus.publishOutbound({
+      // 执行 LLM 循环（可能包含多轮工具调用）
+      const response = await this.runLLMLoop(sessionId, channel, history, abortSignal);
+
+      // 发送响应（仅在未取消时发送）
+      if (!abortSignal.aborted) {
+        await this.messageBus.publishOutbound({
+          id: randomUUID(),
+          channel,
+          sessionId,
+          text: response,
+          timestamp: Date.now(),
+        });
+      }
+    } finally {
+      // 清理 AbortController
+      this.messageBus.clearSessionAbort(sessionId);
+    }
+  }
+
+  /**
+   * 发布进度消息到对应通道
+   */
+  private emitProgress(
+    channel: ChannelName,
+    sessionId: string,
+    progress: Partial<ProgressMessage>,
+  ): void {
+    this.messageBus.publishProgress({
       id: randomUUID(),
       channel,
       sessionId,
-      text: response,
       timestamp: Date.now(),
-    });
+      step: 'thinking',
+      ...progress,
+    } as ProgressMessage);
   }
 
   /**
@@ -173,8 +198,16 @@ export class AgentLoop {
 
   /**
    * LLM 循环：调用 LLM -> 执行工具 -> 再调用 LLM，直到完成
+   * 
+   * 每一步都会通过 emitProgress 向通道推送实时进度。
+   * 支持通过 AbortSignal 取消（客户端断开时自动取消）。
    */
-  private async runLLMLoop(sessionId: string, history: ChatMessage[]): Promise<string> {
+  private async runLLMLoop(
+    sessionId: string,
+    channel: ChannelName,
+    history: ChatMessage[],
+    abortSignal: AbortSignal,
+  ): Promise<string> {
     const messages = [...history];
     let iterations = 0;
 
@@ -184,7 +217,19 @@ export class AgentLoop {
     while (iterations < this.config.maxIterations) {
       iterations++;
 
+      // 检查是否已取消
+      if (abortSignal.aborted) {
+        log.info({ sessionId, iteration: iterations }, '会话已取消，中止 LLM 循环');
+        return '[会话已取消]';
+      }
+
       log.debug({ sessionId, iteration: iterations, messageCount: messages.length }, 'LLM 迭代');
+
+      // 进度: 正在思考
+      this.emitProgress(channel, sessionId, {
+        step: 'thinking',
+        iteration: iterations,
+      });
 
       // 调用 LLM
       const llmResponse = await this.provider.chat({
@@ -195,6 +240,12 @@ export class AgentLoop {
         maxTokens: this.config.maxTokens,
         systemPrompt,
       });
+
+      // LLM 调用完成后再次检查取消
+      if (abortSignal.aborted) {
+        log.info({ sessionId, iteration: iterations }, '会话已取消（LLM 返回后），中止循环');
+        return '[会话已取消]';
+      }
 
       // 如果没有工具调用，返回文本响应
       if (llmResponse.toolCalls.length === 0) {
@@ -210,7 +261,16 @@ export class AgentLoop {
         return assistantContent;
       }
 
-      // 有工具调用 —— 保存 assistant 消息（含工具调用）
+      // 有工具调用 —— 先推送 LLM 的中间回复（如果有文本内容）
+      if (llmResponse.content) {
+        this.emitProgress(channel, sessionId, {
+          step: 'llm_response',
+          iteration: iterations,
+          content: llmResponse.content,
+        });
+      }
+
+      // 保存 assistant 消息（含工具调用）
       const assistantMessage: ChatMessage = {
         role: 'assistant',
         content: llmResponse.content,
@@ -219,16 +279,54 @@ export class AgentLoop {
       messages.push(assistantMessage);
       await this.sessionManager.addMessage(sessionId, assistantMessage);
 
-      // 执行所有工具调用
-      const toolResults = await this.executeToolCalls(llmResponse.toolCalls, sessionId);
+      // 执行所有工具调用，每个都推送进度
+      const sessionWorkspaceDir = await this.sessionManager.getWorkspaceDir(sessionId);
+      for (const tc of llmResponse.toolCalls) {
+        // 每个工具执行前检查取消
+        if (abortSignal.aborted) {
+          log.info({ sessionId, iteration: iterations, toolName: tc.name }, '会话已取消，跳过剩余工具调用');
+          return '[会话已取消]';
+        }
 
-      // 将工具结果添加到消息列表
-      for (const result of toolResults) {
+        // 进度: 开始执行工具
+        this.emitProgress(channel, sessionId, {
+          step: 'tool_call',
+          iteration: iterations,
+          toolName: tc.name,
+          toolArgs: tc.arguments,
+          toolCallId: tc.id,
+        });
+
+        // 执行工具
+        let resultContent: string;
+        let isError = false;
+        try {
+          resultContent = await this.toolRegistry.execute(tc.name, tc.arguments, {
+            sessionId,
+            workspaceDir: sessionWorkspaceDir,
+          });
+        } catch (err) {
+          log.error({ err, toolName: tc.name }, '工具执行失败');
+          resultContent = `工具执行错误: ${(err as Error).message}`;
+          isError = true;
+        }
+
+        // 进度: 工具执行完成
+        this.emitProgress(channel, sessionId, {
+          step: 'tool_result',
+          iteration: iterations,
+          toolName: tc.name,
+          toolCallId: tc.id,
+          content: resultContent,
+          isError,
+        });
+
+        // 将工具结果添加到消息列表
         const toolMessage: ChatMessage = {
           role: 'tool',
-          content: result.content,
-          toolCallId: result.toolCallId,
-          name: result.name,
+          content: resultContent,
+          toolCallId: tc.id,
+          name: tc.name,
         };
         messages.push(toolMessage);
         await this.sessionManager.addMessage(sessionId, toolMessage);
@@ -241,39 +339,6 @@ export class AgentLoop {
       `超过最大迭代次数 (${this.config.maxIterations})`,
       { sessionId, iterations },
     );
-  }
-
-  /**
-   * 执行工具调用列表
-   */
-  private async executeToolCalls(
-    toolCalls: ToolCall[],
-    sessionId: string,
-  ): Promise<Array<{ toolCallId: string; name: string; content: string }>> {
-    const results: Array<{ toolCallId: string; name: string; content: string }> = [];
-
-    for (const tc of toolCalls) {
-      log.info({ toolName: tc.name, toolCallId: tc.id }, '执行工具调用');
-
-      let content: string;
-      try {
-        content = await this.toolRegistry.execute(tc.name, tc.arguments, {
-          sessionId,
-          workspaceDir: this.workspaceDir,
-        });
-      } catch (err) {
-        log.error({ err, toolName: tc.name }, '工具执行失败');
-        content = `工具执行错误: ${(err as Error).message}`;
-      }
-
-      results.push({
-        toolCallId: tc.id,
-        name: tc.name,
-        content,
-      });
-    }
-
-    return results;
   }
 
   /**

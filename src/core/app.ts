@@ -9,10 +9,12 @@ import { MessageBus } from './message-bus.js';
 import { SessionManager } from './session-manager.js';
 import { ToolRegistry } from './tool-registry.js';
 import { AgentLoop } from './agent-loop.js';
+import { Scheduler } from './scheduler.js';
 import { createProvider } from '../providers/provider-factory.js';
 import { CLIChannel } from '../channels/cli-channel.js';
 import { WebChannel } from '../channels/web-channel.js';
 import { getBuiltinTools } from '../tools/index.js';
+import { setScheduler } from '../tools/schedule-tool.js';
 import { MemoryStore } from '../memory/memory-store.js';
 import { SkillsLoader } from '../skills/skills-loader.js';
 import { setLogLevel, createChildLogger } from './logger.js';
@@ -31,6 +33,7 @@ export class SophonApp {
   private readonly provider: LLMProvider;
   private readonly memoryStore: MemoryStore;
   private readonly skillsLoader: SkillsLoader;
+  private readonly scheduler: Scheduler;
   private readonly agentLoop: AgentLoop;
   private readonly channels: Channel[] = [];
 
@@ -49,7 +52,11 @@ export class SophonApp {
     this.memoryStore = new MemoryStore(config.memory);
     this.skillsLoader = new SkillsLoader(config.skillsDir);
 
-    // 注册内置工具
+    // 初始化定时任务调度器
+    this.scheduler = new Scheduler(config.scheduler, this.messageBus, this.sessionManager);
+    setScheduler(this.scheduler);
+
+    // 注册内置工具（含定时任务工具）
     this.toolRegistry.registerAll(getBuiltinTools());
     log.info({ toolCount: this.toolRegistry.size }, '内置工具已注册');
 
@@ -63,7 +70,6 @@ export class SophonApp {
       toolRegistry: this.toolRegistry,
       provider: this.provider,
       config: config.agent,
-      workspaceDir: config.workspaceDir,
       memoryStore: this.memoryStore,
       skillsLoader: this.skillsLoader,
     });
@@ -87,6 +93,9 @@ export class SophonApp {
     } catch (err) {
       log.warn({ err }, '技能加载失败，继续启动');
     }
+
+    // 启动定时任务调度器
+    await this.scheduler.start();
 
     // 启动所有通道
     const channelResults = await Promise.allSettled(
@@ -116,6 +125,9 @@ export class SophonApp {
 
     // 停止 Agent Loop
     this.agentLoop.stop();
+
+    // 停止定时任务调度器
+    await this.scheduler.stop();
 
     // 停止所有通道
     await Promise.allSettled(

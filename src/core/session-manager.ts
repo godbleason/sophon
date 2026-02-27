@@ -2,13 +2,17 @@
  * 会话管理器
  * 
  * 负责会话的创建、加载、持久化。
- * 使用 JSONL 格式存储会话历史（便于追加）。
- * 内存缓存 + 文件持久化。
+ * 
+ * 目录结构（以 session 为中心）：
+ *   <storageDir>/<sessionId>/
+ *     history.jsonl      - 对话历史（JSONL 格式）
+ *     workspace/          - 工具执行产生的文件
+ *     schedules.json      - 定时任务（由 Scheduler 管理）
  */
 
-import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, mkdir, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { ChatMessage } from '../types/message.js';
 import type { SessionConfig } from '../types/config.js';
 import { SessionError } from './errors.js';
@@ -51,15 +55,20 @@ export class SessionManager {
     }
 
     // 尝试从文件加载
-    const filePath = this.getSessionFilePath(sessionId);
-    if (existsSync(filePath)) {
-      const session = await this.loadFromFile(sessionId, filePath);
+    const historyFile = this.getHistoryFilePath(sessionId);
+    if (existsSync(historyFile)) {
+      const session = await this.loadFromFile(sessionId, historyFile);
       this.sessions.set(sessionId, session);
       log.info({ sessionId, messageCount: session.messages.length }, '已加载会话');
       return session;
     }
 
-    // 创建新会话
+    // 创建新会话（同时创建目录）
+    const sessionDir = this.getSessionDir(sessionId);
+    if (!existsSync(sessionDir)) {
+      await mkdir(sessionDir, { recursive: true });
+    }
+
     const session: Session = {
       meta: {
         id: sessionId,
@@ -72,7 +81,7 @@ export class SessionManager {
     };
 
     this.sessions.set(sessionId, session);
-    log.info({ sessionId }, '已创建新会话');
+    log.info({ sessionId, sessionDir }, '已创建新会话');
     return session;
   }
 
@@ -132,7 +141,7 @@ export class SessionManager {
   }
 
   /**
-   * 清除会话
+   * 清除会话（清空历史，保留目录）
    */
   async clearSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
@@ -142,9 +151,9 @@ export class SessionManager {
       session.meta.updatedAt = Date.now();
 
       // 重写文件（清空）
-      const filePath = this.getSessionFilePath(sessionId);
-      await this.ensureDir(filePath);
-      await writeFile(filePath, '', 'utf-8');
+      const historyFile = this.getHistoryFilePath(sessionId);
+      await this.ensureSessionDir(sessionId);
+      await writeFile(historyFile, '', 'utf-8');
       log.info({ sessionId }, '会话已清除');
     }
   }
@@ -164,16 +173,68 @@ export class SessionManager {
     return Array.from(this.sessions.values()).map((s) => ({ ...s.meta }));
   }
 
-  // === 私有方法 ===
+  // ─── 路径相关方法（统一管理） ───
 
-  /** 获取会话文件路径 */
-  private getSessionFilePath(sessionId: string): string {
-    return join(this.config.storageDir, `${sessionId}.jsonl`);
+  /**
+   * 获取 session 根目录
+   *   <storageDir>/<sessionId>/
+   */
+  getSessionDir(sessionId: string): string {
+    return resolve(join(this.config.storageDir, sessionId));
   }
 
-  /** 确保目录存在 */
-  private async ensureDir(filePath: string): Promise<void> {
-    const dir = dirname(filePath);
+  /**
+   * 获取 session 的工作区目录
+   *   <storageDir>/<sessionId>/workspace/
+   */
+  async getWorkspaceDir(sessionId: string): Promise<string> {
+    const workspaceDir = join(this.getSessionDir(sessionId), 'workspace');
+
+    if (!existsSync(workspaceDir)) {
+      await mkdir(workspaceDir, { recursive: true });
+      log.info({ sessionId, workspaceDir }, '已创建会话工作区');
+    }
+
+    return workspaceDir;
+  }
+
+  /**
+   * 获取 session 的定时任务文件路径
+   *   <storageDir>/<sessionId>/schedules.json
+   */
+  getScheduleFilePath(sessionId: string): string {
+    return join(this.getSessionDir(sessionId), 'schedules.json');
+  }
+
+  /**
+   * 列出所有已存在的 session 目录名（用于 Scheduler 恢复）
+   */
+  async listSessionDirs(): Promise<string[]> {
+    const baseDir = resolve(this.config.storageDir);
+    if (!existsSync(baseDir)) {
+      return [];
+    }
+
+    try {
+      const entries = await readdir(baseDir, { withFileTypes: true });
+      return entries
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name);
+    } catch {
+      return [];
+    }
+  }
+
+  // ─── 私有方法 ───
+
+  /** 获取历史文件路径 */
+  private getHistoryFilePath(sessionId: string): string {
+    return join(this.getSessionDir(sessionId), 'history.jsonl');
+  }
+
+  /** 确保 session 目录存在 */
+  private async ensureSessionDir(sessionId: string): Promise<void> {
+    const dir = this.getSessionDir(sessionId);
     if (!existsSync(dir)) {
       await mkdir(dir, { recursive: true });
     }
@@ -216,8 +277,8 @@ export class SessionManager {
 
   /** 追加消息到 JSONL 文件 */
   private async appendToFile(sessionId: string, message: ChatMessage): Promise<void> {
-    const filePath = this.getSessionFilePath(sessionId);
-    await this.ensureDir(filePath);
+    const filePath = this.getHistoryFilePath(sessionId);
+    await this.ensureSessionDir(sessionId);
 
     try {
       const line = JSON.stringify(message) + '\n';

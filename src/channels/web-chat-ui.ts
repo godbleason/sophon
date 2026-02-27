@@ -355,9 +355,94 @@ export function getChatPageHTML(): string {
       color: var(--text-muted);
     }
 
+    /* 进度步骤容器 */
+    .progress-group {
+      align-self: flex-start;
+      max-width: 80%;
+      animation: fadeIn 0.2s ease-out;
+    }
+
+    .progress-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 12px 14px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .progress-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      line-height: 1.5;
+    }
+
+    .progress-step-icon {
+      flex-shrink: 0;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .progress-step-text {
+      flex: 1;
+      word-break: break-word;
+    }
+
+    .progress-step-text .tool-name {
+      color: var(--accent);
+      font-weight: 600;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 12px;
+    }
+
+    .progress-step-text .tool-args {
+      display: block;
+      color: var(--text-muted);
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 11px;
+      margin-top: 2px;
+      white-space: pre-wrap;
+      max-height: 80px;
+      overflow: hidden;
+    }
+
+    .progress-step-text .tool-result {
+      display: block;
+      color: var(--text-muted);
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 11px;
+      margin-top: 2px;
+      white-space: pre-wrap;
+      max-height: 120px;
+      overflow-y: auto;
+      background: var(--bg-primary);
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+
+    .progress-step-text .tool-result.error {
+      color: #f87171;
+      border-color: #7f1d1d;
+    }
+
+    .progress-step.active .progress-step-icon {
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
     /* 响应式 */
     @media (max-width: 640px) {
       .message { max-width: 90%; }
+      .progress-group { max-width: 90%; }
       .messages { padding: 12px; }
       .input-area { padding: 12px; }
     }
@@ -418,6 +503,7 @@ export function getChatPageHTML(): string {
 
     let ws = null;
     let isWaiting = false;
+    let currentProgressEl = null; // 当前进度步骤容器
 
     // === WebSocket 连接 ===
     function connect() {
@@ -440,7 +526,6 @@ export function getChatPageHTML(): string {
         statusDot.classList.remove('connected');
         statusText.textContent = '已断开';
         sendBtn.disabled = true;
-        // 自动重连
         setTimeout(connect, 3000);
       };
 
@@ -454,12 +539,132 @@ export function getChatPageHTML(): string {
       switch (data.type) {
         case 'connected':
           break;
+        case 'progress':
+          handleProgress(data);
+          break;
         case 'response':
           hideTyping();
+          finalizeProgress();
           isWaiting = false;
           addMessage('assistant', data.text);
           break;
       }
+    }
+
+    // === 进度展示 ===
+    function ensureProgressGroup() {
+      if (!currentProgressEl) {
+        currentProgressEl = document.createElement('div');
+        currentProgressEl.className = 'progress-group';
+        const stepsEl = document.createElement('div');
+        stepsEl.className = 'progress-steps';
+        currentProgressEl.appendChild(stepsEl);
+        messagesEl.insertBefore(currentProgressEl, typingIndicator);
+      }
+      return currentProgressEl.querySelector('.progress-steps');
+    }
+
+    function handleProgress(data) {
+      hideTyping();
+      const stepsEl = ensureProgressGroup();
+
+      // 将之前的 active 步骤标记为完成
+      const prevActive = stepsEl.querySelector('.progress-step.active');
+      if (prevActive) {
+        prevActive.classList.remove('active');
+        const icon = prevActive.querySelector('.progress-step-icon');
+        if (icon && icon.textContent === '⏳') icon.textContent = '✅';
+      }
+
+      switch (data.step) {
+        case 'thinking': {
+          const step = createStepEl('⏳', '正在思考...');
+          step.classList.add('active');
+          stepsEl.appendChild(step);
+          break;
+        }
+        case 'tool_call': {
+          const argsStr = data.toolArgs ? JSON.stringify(data.toolArgs, null, 2) : '';
+          const textEl = document.createElement('span');
+          textEl.className = 'progress-step-text';
+          textEl.innerHTML = '调用工具 <span class="tool-name">' + escapeHtml(data.toolName) + '</span>'
+            + (argsStr ? '<span class="tool-args">' + escapeHtml(truncate(argsStr, 200)) + '</span>' : '');
+          const step = createStepElRaw('🔧', textEl);
+          step.classList.add('active');
+          step.dataset.toolCallId = data.toolCallId || '';
+          stepsEl.appendChild(step);
+          break;
+        }
+        case 'tool_result': {
+          // 找到对应 tool_call 步骤更新
+          const callStep = stepsEl.querySelector('[data-tool-call-id="' + (data.toolCallId || '') + '"]');
+          if (callStep) {
+            callStep.classList.remove('active');
+            const icon = callStep.querySelector('.progress-step-icon');
+            if (icon) icon.textContent = data.isError ? '❌' : '✅';
+            // 追加结果
+            const textEl = callStep.querySelector('.progress-step-text');
+            if (textEl && data.content) {
+              const resultEl = document.createElement('span');
+              resultEl.className = 'tool-result' + (data.isError ? ' error' : '');
+              resultEl.textContent = truncate(data.content, 500);
+              textEl.appendChild(resultEl);
+            }
+          }
+          break;
+        }
+        case 'llm_response': {
+          if (data.content) {
+            const step = createStepEl('💬', data.content);
+            stepsEl.appendChild(step);
+          }
+          break;
+        }
+      }
+      scrollToBottom();
+    }
+
+    function createStepEl(icon, text) {
+      const step = document.createElement('div');
+      step.className = 'progress-step';
+      step.innerHTML = '<span class="progress-step-icon">' + icon + '</span>'
+        + '<span class="progress-step-text">' + escapeHtml(text) + '</span>';
+      return step;
+    }
+
+    function createStepElRaw(icon, contentEl) {
+      const step = document.createElement('div');
+      step.className = 'progress-step';
+      const iconEl = document.createElement('span');
+      iconEl.className = 'progress-step-icon';
+      iconEl.textContent = icon;
+      step.appendChild(iconEl);
+      step.appendChild(contentEl);
+      return step;
+    }
+
+    function finalizeProgress() {
+      if (currentProgressEl) {
+        // 标记所有 active 为完成
+        const actives = currentProgressEl.querySelectorAll('.progress-step.active');
+        actives.forEach(el => {
+          el.classList.remove('active');
+          const icon = el.querySelector('.progress-step-icon');
+          if (icon && icon.textContent === '⏳') icon.textContent = '✅';
+        });
+        currentProgressEl = null;
+      }
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function truncate(str, max) {
+      if (str.length <= max) return str;
+      return str.substring(0, max) + '...';
     }
 
     // === 消息发送 ===
@@ -533,8 +738,13 @@ export function getChatPageHTML(): string {
     }
 
     // === 输入框处理 ===
+    let isComposing = false; // 输入法组合状态
+
+    inputEl.addEventListener('compositionstart', () => { isComposing = true; });
+    inputEl.addEventListener('compositionend', () => { isComposing = false; });
+
     inputEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey && !isComposing) {
         e.preventDefault();
         sendMessage();
       }

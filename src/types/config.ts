@@ -22,7 +22,13 @@ const AgentConfigSchema = z.object({
 
 /** 会话配置 Schema */
 const SessionConfigSchema = z.object({
-  /** 会话存储目录 */
+  /**
+   * 会话数据根目录。每个 session 在此目录下拥有独立子目录：
+   *   <storageDir>/<sessionId>/
+   *     history.jsonl      - 对话历史
+   *     workspace/          - 工具执行产生的文件
+   *     schedules.json      - 定时任务
+   */
   storageDir: z.string().default('data/sessions'),
   /** 记忆窗口大小（保留最近 N 条消息） */
   memoryWindow: z.number().positive().default(50),
@@ -63,6 +69,14 @@ const ChannelConfigSchema = z.object({
   }).default({}),
 });
 
+/** 定时任务配置 Schema */
+const SchedulerConfigSchema = z.object({
+  /** 是否启用定时任务 */
+  enabled: z.boolean().default(true),
+  /** 单个会话最大任务数 */
+  maxTasksPerSession: z.number().positive().default(20),
+});
+
 /** 顶层配置 Schema */
 export const ConfigSchema = z.object({
   /** LLM 提供商配置 */
@@ -75,6 +89,8 @@ export const ConfigSchema = z.object({
   memory: MemoryConfigSchema.default({}),
   /** 通道配置 */
   channels: ChannelConfigSchema.default({}),
+  /** 定时任务配置 */
+  scheduler: SchedulerConfigSchema.default({}),
   /** 工作区目录 */
   workspaceDir: z.string().default('.'),
   /** 技能目录 */
@@ -90,3 +106,4 @@ export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 export type SessionConfig = z.infer<typeof SessionConfigSchema>;
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 export type ChannelConfig = z.infer<typeof ChannelConfigSchema>;
+export type SchedulerConfig = z.infer<typeof SchedulerConfigSchema>;

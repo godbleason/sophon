@@ -68,3 +68,36 @@ export interface OutboundMessage {
   /** 附加元数据 */
   metadata?: Record<string, unknown>;
 }
+
+/** 进度消息步骤类型 */
+export type ProgressStep =
+  | 'thinking'       // LLM 正在思考
+  | 'tool_call'      // 开始执行工具
+  | 'tool_result'    // 工具执行完成
+  | 'llm_response';  // LLM 中间响应（有 toolCalls 时的文本）
+
+/** 进度消息（实时推送到通道，展示 Agent 每一步过程） */
+export interface ProgressMessage {
+  /** 消息唯一 ID */
+  id: string;
+  /** 目标通道 */
+  channel: ChannelName;
+  /** 会话 ID */
+  sessionId: string;
+  /** 进度步骤类型 */
+  step: ProgressStep;
+  /** 时间戳 */
+  timestamp: number;
+  /** 当前迭代轮次 */
+  iteration?: number;
+  /** 工具名称 */
+  toolName?: string;
+  /** 工具调用参数 */
+  toolArgs?: Record<string, unknown>;
+  /** 工具调用 ID */
+  toolCallId?: string;
+  /** 文本内容（工具结果 / LLM 中间文本） */
+  content?: string;
+  /** 是否出错 */
+  isError?: boolean;
+}

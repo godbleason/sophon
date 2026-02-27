@@ -10,6 +10,8 @@ export type {
   ChatMessage,
   InboundMessage,
   OutboundMessage,
+  ProgressStep,
+  ProgressMessage,
 } from './message.js';
 
 export type {
@@ -37,4 +39,5 @@ export type {
   SessionConfig,
   MemoryConfig,
   ChannelConfig,
+  SchedulerConfig,
 } from './config.js';
