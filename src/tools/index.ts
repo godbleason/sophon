@@ -12,6 +12,11 @@ import {
   RemoveScheduleTool,
   ToggleScheduleTool,
 } from './schedule-tool.js';
+import {
+  SpawnTool,
+  SubagentStatusTool,
+  CancelSubagentTool,
+} from './spawn-tool.js';
 
 /**
  * 获取所有内置工具
@@ -27,6 +32,9 @@ export function getBuiltinTools(): Tool[] {
     new ListSchedulesTool(),
     new RemoveScheduleTool(),
     new ToggleScheduleTool(),
+    new SpawnTool(),
+    new SubagentStatusTool(),
+    new CancelSubagentTool(),
   ];
 }
 
@@ -40,4 +48,7 @@ export {
   ListSchedulesTool,
   RemoveScheduleTool,
   ToggleScheduleTool,
+  SpawnTool,
+  SubagentStatusTool,
+  CancelSubagentTool,
 };

@@ -118,3 +118,21 @@ export class AgentLoopError extends SophonError {
     this.name = 'AgentLoopError';
   }
 }
+
+/** 子代理错误 */
+export class SubagentError extends SophonError {
+  constructor(
+    public readonly taskId: string,
+    message: string,
+    context?: Record<string, unknown>,
+    options?: ErrorOptions,
+  ) {
+    super(
+      `[Subagent: ${taskId}] ${message}`,
+      'SUBAGENT_ERROR',
+      { taskId, ...context },
+      options,
+    );
+    this.name = 'SubagentError';
+  }
+}

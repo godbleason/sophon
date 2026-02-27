@@ -77,6 +77,26 @@ const SchedulerConfigSchema = z.object({
   maxTasksPerSession: z.number().positive().default(20),
 });
 
+/** 子代理配置 Schema */
+const SubagentConfigSchema = z.object({
+  /** 是否启用子代理 */
+  enabled: z.boolean().default(true),
+  /** 子代理最大迭代次数（比主代理更严格） */
+  maxIterations: z.number().positive().default(15),
+  /** 同时运行的子代理最大数量 */
+  maxConcurrent: z.number().positive().default(5),
+  /** 子代理执行超时时间（毫秒），默认 5 分钟 */
+  timeout: z.number().positive().default(300_000),
+  /** 子代理使用的模型（不设置则复用主代理模型） */
+  model: z.string().optional(),
+  /** 子代理温度参数 */
+  temperature: z.number().min(0).max(2).default(0.7),
+  /** 子代理最大 token 数 */
+  maxTokens: z.number().positive().default(4096),
+  /** 子代理不可用的工具列表（黑名单） */
+  toolBlacklist: z.array(z.string()).default(['spawn']),
+});
+
 /** 顶层配置 Schema */
 export const ConfigSchema = z.object({
   /** LLM 提供商配置 */
@@ -91,6 +111,8 @@ export const ConfigSchema = z.object({
   channels: ChannelConfigSchema.default({}),
   /** 定时任务配置 */
   scheduler: SchedulerConfigSchema.default({}),
+  /** 子代理配置 */
+  subagent: SubagentConfigSchema.default({}),
   /** 工作区目录 */
   workspaceDir: z.string().default('.'),
   /** 技能目录 */
@@ -107,3 +129,4 @@ export type SessionConfig = z.infer<typeof SessionConfigSchema>;
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 export type ChannelConfig = z.infer<typeof ChannelConfigSchema>;
 export type SchedulerConfig = z.infer<typeof SchedulerConfigSchema>;
+export type SubagentConfig = z.infer<typeof SubagentConfigSchema>;

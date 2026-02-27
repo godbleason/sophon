@@ -19,6 +19,7 @@ import { SessionManager } from './session-manager.js';
 import { ToolRegistry } from './tool-registry.js';
 import { AgentLoopError } from './errors.js';
 import { createChildLogger } from './logger.js';
+import { setCurrentOrigin, clearCurrentOrigin } from '../tools/spawn-tool.js';
 import type { MemoryStore } from '../memory/memory-store.js';
 import type { SkillsLoader } from '../skills/skills-loader.js';
 
@@ -124,6 +125,9 @@ export class AgentLoop {
     const abortSignal = this.messageBus.createSessionAbort(sessionId);
 
     try {
+      // 设置子代理来源上下文（让 SpawnTool 知道当前消息来源）
+      setCurrentOrigin({ sessionId, channel });
+
       // 获取或创建会话
       const session = await this.sessionManager.getOrCreate(sessionId, channel);
 
@@ -148,6 +152,8 @@ export class AgentLoop {
         });
       }
     } finally {
+      // 清理子代理来源上下文
+      clearCurrentOrigin();
       // 清理 AbortController
       this.messageBus.clearSessionAbort(sessionId);
     }

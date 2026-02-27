@@ -40,4 +40,5 @@ export type {
   MemoryConfig,
   ChannelConfig,
   SchedulerConfig,
+  SubagentConfig,
 } from './config.js';

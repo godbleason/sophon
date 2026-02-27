@@ -10,11 +10,13 @@ import { SessionManager } from './session-manager.js';
 import { ToolRegistry } from './tool-registry.js';
 import { AgentLoop } from './agent-loop.js';
 import { Scheduler } from './scheduler.js';
+import { SubagentManager } from './subagent-manager.js';
 import { createProvider } from '../providers/provider-factory.js';
 import { CLIChannel } from '../channels/cli-channel.js';
 import { WebChannel } from '../channels/web-channel.js';
 import { getBuiltinTools } from '../tools/index.js';
 import { setScheduler } from '../tools/schedule-tool.js';
+import { setSubagentManager } from '../tools/spawn-tool.js';
 import { MemoryStore } from '../memory/memory-store.js';
 import { SkillsLoader } from '../skills/skills-loader.js';
 import { setLogLevel, createChildLogger } from './logger.js';
@@ -34,6 +36,7 @@ export class SophonApp {
   private readonly memoryStore: MemoryStore;
   private readonly skillsLoader: SkillsLoader;
   private readonly scheduler: Scheduler;
+  private readonly subagentManager: SubagentManager;
   private readonly agentLoop: AgentLoop;
   private readonly channels: Channel[] = [];
 
@@ -56,12 +59,23 @@ export class SophonApp {
     this.scheduler = new Scheduler(config.scheduler, this.messageBus, this.sessionManager);
     setScheduler(this.scheduler);
 
-    // 注册内置工具（含定时任务工具）
+    // 注册内置工具（含定时任务工具和子代理工具）
     this.toolRegistry.registerAll(getBuiltinTools());
     log.info({ toolCount: this.toolRegistry.size }, '内置工具已注册');
 
     // 创建 LLM Provider
     this.provider = this.createLLMProvider();
+
+    // 初始化子代理管理器
+    this.subagentManager = new SubagentManager(
+      config.subagent,
+      this.messageBus,
+      this.provider,
+      this.toolRegistry,
+      config.agent.model,
+    );
+    setSubagentManager(this.subagentManager);
+    log.info('子代理管理器已初始化');
 
     // 创建 Agent Loop
     this.agentLoop = new AgentLoop({
@@ -125,6 +139,9 @@ export class SophonApp {
 
     // 停止 Agent Loop
     this.agentLoop.stop();
+
+    // 停止所有子代理
+    await this.subagentManager.stopAll();
 
     // 停止定时任务调度器
     await this.scheduler.stop();
