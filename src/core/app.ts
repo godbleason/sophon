@@ -18,6 +18,7 @@ import { TelegramChannel } from '../channels/telegram-channel.js';
 import { getBuiltinTools } from '../tools/index.js';
 import { setScheduler } from '../tools/schedule-tool.js';
 import { setSubagentManager } from '../tools/spawn-tool.js';
+import { setMessageToolDeps } from '../tools/message-tool.js';
 import { MemoryStore } from '../memory/memory-store.js';
 import { SkillsLoader } from '../skills/skills-loader.js';
 import { UserStore } from './user-store.js';
@@ -83,6 +84,14 @@ export class SophonApp {
     );
     setSubagentManager(this.subagentManager);
     log.info('子代理管理器已初始化');
+
+    // 注入消息工具依赖
+    setMessageToolDeps({
+      messageBus: this.messageBus,
+      sessionManager: this.sessionManager,
+      spaceManager: this.spaceManager,
+      userStore: this.userStore,
+    });
 
     // 创建 Agent Loop
     this.agentLoop = new AgentLoop({

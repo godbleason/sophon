@@ -8,10 +8,13 @@
  * - 耗时任务（代码分析、大量文件处理）
  * - 独立任务（不需要用户交互）
  * - 并发处理（多个独立任务同时执行）
+ *
+ * 并发安全：
+ * - 通过 ToolContext.sessionId/channel 获取来源上下文，不使用全局变量
  */
 
 import type { Tool, ToolParametersSchema, ToolContext } from '../types/tool.js';
-import type { SubagentManager, OriginContext } from '../core/subagent-manager.js';
+import type { SubagentManager } from '../core/subagent-manager.js';
 import { ToolExecutionError } from '../core/errors.js';
 
 /**
@@ -20,29 +23,10 @@ import { ToolExecutionError } from '../core/errors.js';
 let subagentManager: SubagentManager | null = null;
 
 /**
- * 存储当前工具调用的来源上下文（由 AgentLoop 在处理消息时设置）
- */
-let currentOrigin: OriginContext | null = null;
-
-/**
  * 注入 SubagentManager 实例
  */
 export function setSubagentManager(manager: SubagentManager): void {
   subagentManager = manager;
-}
-
-/**
- * 设置当前的来源上下文（在每次消息处理开始时由 AgentLoop 调用）
- */
-export function setCurrentOrigin(origin: OriginContext): void {
-  currentOrigin = origin;
-}
-
-/**
- * 清除当前的来源上下文
- */
-export function clearCurrentOrigin(): void {
-  currentOrigin = null;
 }
 
 /**
@@ -57,6 +41,8 @@ function getManager(): SubagentManager {
 
 /**
  * Spawn 工具 - 生成子代理
+ *
+ * 通过 ToolContext.sessionId/channel 获取来源上下文，并发安全。
  */
 export class SpawnTool implements Tool {
   readonly name = 'spawn';
@@ -79,7 +65,7 @@ export class SpawnTool implements Tool {
     required: ['task'],
   };
 
-  async execute(params: Record<string, unknown>, _context: ToolContext): Promise<string> {
+  async execute(params: Record<string, unknown>, context: ToolContext): Promise<string> {
     const task = params['task'] as string;
     const label = params['label'] as string | undefined;
 
@@ -89,15 +75,19 @@ export class SpawnTool implements Tool {
 
     const manager = getManager();
 
-    // 获取来源上下文
-    const origin = currentOrigin;
-    if (!origin) {
+    // 从 ToolContext 构建来源上下文（并发安全）
+    if (!context.sessionId || !context.channel) {
       throw new ToolExecutionError(
         this.name,
         params,
         new Error('无法确定来源上下文（sessionId / channel）'),
       );
     }
+
+    const origin = {
+      sessionId: context.sessionId,
+      channel: context.channel,
+    };
 
     try {
       const taskId = manager.spawn(task, origin, { label });

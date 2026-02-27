@@ -535,6 +535,77 @@ export class SpaceManager {
   }
 
   /**
+   * 在用户的所有 Space 中，通过昵称或姓名解析目标成员
+   *
+   * 解析逻辑（优先级从高到低）：
+   * 1. 精确匹配某个 Space 成员的昵称
+   * 2. 精确匹配某个用户的姓名（需通过 userNames 映射）
+   * 3. 模糊匹配（昵称或姓名包含查询词）
+   *
+   * @param currentUserId 当前用户 ID（排除自己）
+   * @param query 昵称或姓名关键词（如 "爷爷"、"王总"）
+   * @param userNames userId -> name 映射
+   * @returns 匹配到的 { userId, spaceId, spaceName, nickname } 或 undefined
+   */
+  resolveMemberByName(
+    currentUserId: string,
+    query: string,
+    userNames: Map<string, string>,
+  ): { userId: string; spaceId: string; spaceName: string; nickname?: string } | undefined {
+    const spaces = this.listUserSpaces(currentUserId);
+
+    // 第一轮：精确匹配昵称
+    for (const space of spaces) {
+      for (const member of space.members) {
+        if (member.userId === currentUserId) continue;
+        if (member.nickname && member.nickname === query) {
+          return {
+            userId: member.userId,
+            spaceId: space.id,
+            spaceName: space.name,
+            nickname: member.nickname,
+          };
+        }
+      }
+    }
+
+    // 第二轮：精确匹配姓名
+    for (const space of spaces) {
+      for (const member of space.members) {
+        if (member.userId === currentUserId) continue;
+        const name = userNames.get(member.userId);
+        if (name && name === query) {
+          return {
+            userId: member.userId,
+            spaceId: space.id,
+            spaceName: space.name,
+            nickname: member.nickname,
+          };
+        }
+      }
+    }
+
+    // 第三轮：模糊匹配（昵称或姓名包含查询词）
+    for (const space of spaces) {
+      for (const member of space.members) {
+        if (member.userId === currentUserId) continue;
+        const name = userNames.get(member.userId) || '';
+        const nickname = member.nickname || '';
+        if (nickname.includes(query) || name.includes(query)) {
+          return {
+            userId: member.userId,
+            spaceId: space.id,
+            spaceName: space.name,
+            nickname: member.nickname,
+          };
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
    * 获取 Space 总数
    */
   get size(): number {
@@ -564,6 +635,14 @@ export class SpaceManager {
       '',
       '当前用户加入了以下 Space。当用户消息中提到某个成员的名字或昵称时，',
       '请自动识别该成员所属的 Space 上下文，并在此上下文中理解和执行用户的意图。',
+      '',
+      '### 重要：跨用户消息发送',
+      '当用户想要通知、提醒或传话给 Space 中的其他成员时，',
+      '你必须使用 `send_message` 工具将消息直接发送给目标成员，',
+      '而不是仅回复给当前用户。',
+      '示例：',
+      '- 用户说「提醒爷爷1小时后吃药」→ 创建定时任务，到时间后用 send_message 工具给「爷爷」发消息',
+      '- 用户说「告诉王总下午3点开会」→ 立即用 send_message 工具给「王总」发消息',
       '',
     ];
 

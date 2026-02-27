@@ -207,6 +207,22 @@ export class SessionManager {
   }
 
   /**
+   * 查找用户的所有活跃 session
+   *
+   * 遍历内存中的所有 session，返回关联到指定 userId 的 session 列表。
+   * 一个用户可能在多个通道上有多个 session。
+   */
+  findSessionsByUser(userId: string): SessionMeta[] {
+    const result: SessionMeta[] = [];
+    for (const session of this.sessions.values()) {
+      if (session.meta.userId === userId) {
+        result.push({ ...session.meta });
+      }
+    }
+    return result;
+  }
+
+  /**
    * 列出所有活跃会话
    */
   listSessions(): SessionMeta[] {

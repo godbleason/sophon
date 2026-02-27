@@ -17,6 +17,7 @@ import {
   SubagentStatusTool,
   CancelSubagentTool,
 } from './spawn-tool.js';
+import { SendMessageTool } from './message-tool.js';
 
 /**
  * 获取所有内置工具
@@ -35,6 +36,7 @@ export function getBuiltinTools(): Tool[] {
     new SpawnTool(),
     new SubagentStatusTool(),
     new CancelSubagentTool(),
+    new SendMessageTool(),
   ];
 }
 
@@ -51,4 +53,5 @@ export {
   SpawnTool,
   SubagentStatusTool,
   CancelSubagentTool,
+  SendMessageTool,
 };

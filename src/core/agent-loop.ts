@@ -26,7 +26,6 @@ import { ToolRegistry } from './tool-registry.js';
 import { Semaphore } from './semaphore.js';
 import { AgentLoopError } from './errors.js';
 import { createChildLogger } from './logger.js';
-import { setCurrentOrigin, clearCurrentOrigin } from '../tools/spawn-tool.js';
 import type { MemoryStore } from '../memory/memory-store.js';
 import type { SkillsLoader } from '../skills/skills-loader.js';
 import type { UserStore } from './user-store.js';
@@ -297,33 +296,25 @@ export class AgentLoop {
 
     log.info({ sessionId, channel, textLength: text.length }, '处理消息');
 
-    try {
-      // 设置子代理来源上下文（让 SpawnTool 知道当前消息来源）
-      setCurrentOrigin({ sessionId, channel });
+    // 添加用户消息到会话
+    const userMessage: ChatMessage = { role: 'user', content: text };
+    await this.sessionManager.addMessage(sessionId, userMessage);
 
-      // 添加用户消息到会话
-      const userMessage: ChatMessage = { role: 'user', content: text };
-      await this.sessionManager.addMessage(sessionId, userMessage);
+    // 获取历史消息
+    const history = this.sessionManager.getHistory(sessionId);
 
-      // 获取历史消息
-      const history = this.sessionManager.getHistory(sessionId);
+    // 执行 LLM 循环（可能包含多轮工具调用）
+    const response = await this.runLLMLoop(sessionId, channel, history, abortSignal);
 
-      // 执行 LLM 循环（可能包含多轮工具调用）
-      const response = await this.runLLMLoop(sessionId, channel, history, abortSignal);
-
-      // 发送响应（仅在未取消时发送）
-      if (!abortSignal.aborted) {
-        await this.messageBus.publishOutbound({
-          id: randomUUID(),
-          channel,
-          sessionId,
-          text: response,
-          timestamp: Date.now(),
-        });
-      }
-    } finally {
-      // 清理子代理来源上下文
-      clearCurrentOrigin();
+    // 发送响应（仅在未取消时发送）
+    if (!abortSignal.aborted) {
+      await this.messageBus.publishOutbound({
+        id: randomUUID(),
+        channel,
+        sessionId,
+        text: response,
+        timestamp: Date.now(),
+      });
     }
   }
 
@@ -508,6 +499,8 @@ export class AgentLoop {
           resultContent = await this.toolRegistry.execute(tc.name, tc.arguments, {
             sessionId,
             workspaceDir: sessionWorkspaceDir,
+            channel,
+            userId: this.sessionManager.getSessionUserId(sessionId),
           });
         } catch (err) {
           log.error({ err, toolName: tc.name }, '工具执行失败');

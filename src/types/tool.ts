@@ -32,8 +32,14 @@ export interface ToolDefinition {
 
 /** 工具执行上下文 */
 export interface ToolContext {
+  /** 当前会话 ID */
   sessionId: string;
+  /** 工作目录 */
   workspaceDir: string;
+  /** 来源通道名称 */
+  channel?: string;
+  /** 当前用户 ID（已关联的用户） */
+  userId?: string;
 }
 
 /** 工具接口 */
