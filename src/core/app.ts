@@ -229,6 +229,7 @@ export class SophonApp {
       this.channels.push(
         new WebChannel({
           messageBus: this.messageBus,
+          sessionManager: this.sessionManager,
           port: channels.web.port,
           host: channels.web.host,
         }),

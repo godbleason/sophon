@@ -497,16 +497,25 @@
     let isWaiting = false;
     let currentProgressEl = null; // 当前进度步骤容器
 
+    // === 持久化客户端身份 ===
+    function getClientId() {
+      let id = localStorage.getItem('sophon_client_id');
+      if (!id) {
+        id = crypto.randomUUID();
+        localStorage.setItem('sophon_client_id', id);
+      }
+      return id;
+    }
+    const clientId = getClientId();
+
     // === WebSocket 连接 ===
     function connect() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       ws = new WebSocket(protocol + '//' + location.host);
 
       ws.onopen = () => {
-        statusDot.classList.add('connected');
-        statusText.textContent = '已连接';
-        sendBtn.disabled = false;
-        inputEl.focus();
+        // 连接后立即发送身份标识，让后端恢复 session
+        ws.send(JSON.stringify({ type: 'identify', clientId }));
       };
 
       ws.onmessage = (event) => {
@@ -530,6 +539,17 @@
     function handleServerMessage(data) {
       switch (data.type) {
         case 'connected':
+          statusDot.classList.add('connected');
+          statusText.textContent = '已连接';
+          sendBtn.disabled = false;
+          inputEl.focus();
+          // 如果服务端返回了历史消息，恢复显示
+          if (data.history && data.history.length > 0) {
+            if (welcomeEl) welcomeEl.style.display = 'none';
+            for (const msg of data.history) {
+              addMessage(msg.role, msg.content);
+            }
+          }
           break;
         case 'progress':
           handleProgress(data);
