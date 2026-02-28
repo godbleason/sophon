@@ -297,10 +297,10 @@
     .input-box {
       flex: 1;
       display: flex;
-      align-items: flex-end;
+      align-items: center;
       background: var(--bg-input);
       border: 1px solid var(--border);
-      border-radius: 12px;
+      border-radius: 9999px;
       transition: border-color 0.15s;
     }
 
@@ -312,7 +312,7 @@
       flex: 1;
       background: transparent;
       border: none;
-      padding: 12px 14px;
+      padding: 12px 6px 12px 14px;
       color: var(--text-primary);
       font-size: 14px;
       font-family: inherit;
@@ -327,32 +327,36 @@
       color: var(--text-muted);
     }
 
+    .send-btn-wrapper {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      padding: 0 6px 0 0;
+    }
+
     .send-btn {
-      width: 44px;
-      min-height: 44px;
-      background: transparent;
+      width: 34px;
+      height: 34px;
+      background: var(--accent);
       border: none;
-      border-radius: 0 11px 11px 0;
-      color: var(--accent);
-      font-size: 18px;
+      border-radius: 50%;
+      color: #fff;
+      font-size: 16px;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
       transition: all 0.15s;
-      flex-shrink: 0;
-      align-self: stretch;
     }
 
     .send-btn:hover {
-      color: var(--accent-hover);
-      background: rgba(99, 102, 241, 0.1);
+      background: var(--accent-hover);
     }
 
     .send-btn:disabled {
       cursor: not-allowed;
+      background: var(--bg-tertiary);
       color: var(--text-muted);
-      background: transparent;
     }
 
     /* 菜单按钮（输入框内前缀） */
@@ -360,11 +364,12 @@
       position: relative;
       flex-shrink: 0;
       display: flex;
-      align-items: stretch;
+      align-items: center;
     }
 
     .menu-btn {
       width: 40px;
+      height: 100%;
       background: transparent;
       border: none;
       border-right: 1px solid var(--border);
@@ -648,9 +653,11 @@
           placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
           rows="1"
         ></textarea>
-        <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
-          ↑
-        </button>
+        <div class="send-btn-wrapper">
+          <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
+            ↑
+          </button>
+        </div>
       </div>
     </div>
   </div>
