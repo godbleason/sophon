@@ -167,6 +167,7 @@ export class TelegramChannel implements Channel {
             '可用命令：\n' +
             '/start - 开始对话\n' +
             '/help - 显示帮助\n' +
+            '/about - 了解平台功能和 Space 介绍\n' +
             '/reset - 重置会话\n' +
             '/clear - 清除当前会话\n' +
             '/tools - 列出可用工具\n' +
