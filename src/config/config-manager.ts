@@ -55,19 +55,30 @@ async function loadConfigFile(configPath: string): Promise<Record<string, unknow
  * 同时支持 .env.local 作为本地覆盖。
  */
 function loadEnvFile(): void {
+  let loaded = false;
+
   // .env.local 优先级更高，先加载
-  const localResult = dotenvConfig({ path: resolve('.env.local') });
-  if (localResult.parsed) {
-    log.info({ count: Object.keys(localResult.parsed).length }, '已加载 .env.local');
+  const localPath = resolve('.env.local');
+  if (existsSync(localPath)) {
+    const localResult = dotenvConfig({ path: localPath });
+    if (localResult.parsed) {
+      log.info({ count: Object.keys(localResult.parsed).length }, '已加载 .env.local');
+      loaded = true;
+    }
   }
 
-  const result = dotenvConfig({ path: resolve('.env') });
-  if (result.parsed) {
-    log.info({ count: Object.keys(result.parsed).length }, '已加载 .env');
+  // .env
+  const envPath = resolve('.env');
+  if (existsSync(envPath)) {
+    const result = dotenvConfig({ path: envPath });
+    if (result.parsed) {
+      log.info({ count: Object.keys(result.parsed).length }, '已加载 .env');
+      loaded = true;
+    }
   }
 
-  if (result.error && localResult.error) {
-    log.debug('未找到 .env 文件，跳过');
+  if (!loaded) {
+    log.debug('未找到 .env 文件，跳过（使用系统环境变量）');
   }
 }
 
