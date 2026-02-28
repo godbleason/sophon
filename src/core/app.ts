@@ -216,15 +216,19 @@ export class SophonApp {
   private initChannels(): void {
     const { channels } = this.config;
 
-    // CLI 通道
+    // CLI 通道（仅在交互式终端环境下启用，非 TTY 环境如 Railway 自动跳过）
     if (channels.cli.enabled) {
-      this.channels.push(
-        new CLIChannel({
-          messageBus: this.messageBus,
-          prompt: channels.cli.prompt,
-        }),
-      );
-      log.info('CLI 通道已配置');
+      if (process.stdin.isTTY) {
+        this.channels.push(
+          new CLIChannel({
+            messageBus: this.messageBus,
+            prompt: channels.cli.prompt,
+          }),
+        );
+        log.info('CLI 通道已配置');
+      } else {
+        log.info('stdin 不是 TTY，跳过 CLI 通道（云部署环境）');
+      }
     }
 
     // Web 通道
