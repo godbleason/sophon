@@ -347,6 +347,76 @@
       color: var(--text-muted);
     }
 
+    /* 菜单按钮 */
+    .menu-container {
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .menu-btn {
+      width: 44px;
+      height: 44px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text-secondary);
+      font-size: 20px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+    }
+
+    .menu-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .menu-dropdown {
+      display: none;
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 0;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 6px 0;
+      min-width: 160px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+      z-index: 100;
+      animation: fadeIn 0.15s ease-out;
+    }
+
+    .menu-dropdown.visible {
+      display: block;
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      color: var(--text-primary);
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.1s;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+    }
+
+    .menu-item:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .menu-item .menu-icon {
+      font-size: 16px;
+      width: 20px;
+      text-align: center;
+    }
+
     /* 进度步骤容器 */
     .progress-group {
       align-self: flex-start;
@@ -546,6 +616,23 @@
 
   <div class="input-area">
     <div class="input-wrapper">
+      <div class="menu-container">
+        <button class="menu-btn" id="menuBtn" title="菜单">☰</button>
+        <div class="menu-dropdown" id="menuDropdown">
+          <button class="menu-item" onclick="sendCommand('/help')">
+            <span class="menu-icon">📖</span>帮助
+          </button>
+          <button class="menu-item" onclick="sendCommand('/tools')">
+            <span class="menu-icon">🔧</span>工具列表
+          </button>
+          <button class="menu-item" onclick="sendCommand('/status')">
+            <span class="menu-icon">📊</span>状态
+          </button>
+          <button class="menu-item" onclick="sendCommand('/whoami')">
+            <span class="menu-icon">👤</span>我的身份
+          </button>
+        </div>
+      </div>
       <textarea
         id="messageInput"
         placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
@@ -897,6 +984,25 @@
     function sendQuickMessage(text) {
       inputEl.value = text;
       sendMessage();
+    }
+
+    // === 菜单 ===
+    const menuBtn = document.getElementById('menuBtn');
+    const menuDropdown = document.getElementById('menuDropdown');
+
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menuDropdown.classList.toggle('visible');
+    });
+
+    // 点击页面其他地方关闭菜单
+    document.addEventListener('click', () => {
+      menuDropdown.classList.remove('visible');
+    });
+
+    function sendCommand(cmd) {
+      menuDropdown.classList.remove('visible');
+      sendQuickMessage(cmd);
     }
 
     // === UI 辅助 ===
