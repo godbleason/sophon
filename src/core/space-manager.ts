@@ -631,36 +631,37 @@ export class SpaceManager {
 
     const lines: string[] = [
       '',
-      '\n## 用户的 Space（群组/空间）信息',
+      '\n## User\'s Spaces (Groups)',
       '',
-      '当前用户加入了以下 Space。当用户消息中提到某个成员的名字或昵称时，',
-      '请自动识别该成员所属的 Space 上下文，并在此上下文中理解和执行用户的意图。',
+      'The current user has joined the following Spaces. When the user\'s message mentions',
+      'a member\'s name or nickname, automatically identify which Space the member belongs to',
+      'and understand/execute the user\'s intent within that Space context.',
       '',
-      '### 重要：跨用户消息发送',
-      '当用户想要通知、提醒或传话给 Space 中的其他成员时，',
-      '你必须使用 `send_message` 工具将消息直接发送给目标成员，',
-      '而不是仅回复给当前用户。',
-      '示例：',
-      '- 用户说「提醒爷爷1小时后吃药」→ 创建定时任务，到时间后用 send_message 工具给「爷爷」发消息',
-      '- 用户说「告诉王总下午3点开会」→ 立即用 send_message 工具给「王总」发消息',
+      '### Important: Cross-User Messaging',
+      'When the user wants to notify, remind, or relay a message to another member in a Space,',
+      'you MUST use the `send_message` tool to send the message directly to the target member,',
+      'instead of only replying to the current user.',
+      'Examples:',
+      '- User says "remind grandpa to take medicine in 1 hour" → create a scheduled task, then use send_message to notify "grandpa" when the time comes',
+      '- User says "tell Manager Wang the meeting is at 3pm" → immediately use send_message to notify "Manager Wang"',
       '',
     ];
 
     for (const space of spaces) {
       const currentMember = space.members.find((m) => m.userId === userId);
-      const myNick = currentMember?.nickname ? ` (我的昵称: ${currentMember.nickname})` : '';
+      const myNick = currentMember?.nickname ? ` (my nickname: ${currentMember.nickname})` : '';
 
       lines.push(`### ${space.name}${myNick}`);
       if (space.description) {
-        lines.push(`描述: ${space.description}`);
+        lines.push(`Description: ${space.description}`);
       }
-      lines.push(`成员:`);
+      lines.push(`Members:`);
 
       for (const m of space.members) {
-        const name = userNames.get(m.userId) || '未知用户';
-        const nickname = m.nickname ? `「${m.nickname}」` : '';
-        const isMe = m.userId === userId ? ' ← 当前用户' : '';
-        lines.push(`  - ${name} ${nickname}${isMe}`);
+        const name = userNames.get(m.userId) || 'Unknown User';
+        const nickname = m.nickname ? ` "${m.nickname}"` : '';
+        const isMe = m.userId === userId ? ' ← current user' : '';
+        lines.push(`  - ${name}${nickname}${isMe}`);
       }
 
       lines.push('');
