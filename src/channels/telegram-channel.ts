@@ -123,6 +123,31 @@ export class TelegramChannel implements Channel {
         }
       }
 
+      // 获取或创建用户会话（所有消息都需要，包括命令）
+      let session = this.userSessions.get(userId);
+      if (!session) {
+        session = {
+          sessionId: `tg-${userId}`,
+          chatId,
+          username,
+        };
+        this.userSessions.set(userId, session);
+        log.info({ userId, username, sessionId: session.sessionId }, '新建 Telegram 用户会话');
+      }
+
+      // 更新 chatId（用户可能从不同的 chat 发消息）
+      session.chatId = chatId;
+
+      // 确保 session 在 SessionManager 中注册（首次会创建 meta.json）
+      await this.sessionManager.getOrCreate(session.sessionId, 'telegram');
+
+      // 持久化 chatId 到 session 元数据，确保重启后可恢复
+      this.sessionManager.setSessionChannelData(session.sessionId, {
+        chatId,
+        telegramUserId: userId,
+        username,
+      });
+
       // 处理 /start 命令
       if (text === '/start') {
         await this.sendMessage(chatId, '🤖 欢迎使用 Sophon AI 助手！\n\n直接发送消息即可开始对话。');
@@ -168,28 +193,6 @@ export class TelegramChannel implements Channel {
       }
 
       // 其他斜杠命令（/link, /whoami, /clear 等）交给 AgentLoop 统一处理
-
-      // 获取或创建用户会话
-      let session = this.userSessions.get(userId);
-      if (!session) {
-        session = {
-          sessionId: `tg-${userId}`,
-          chatId,
-          username,
-        };
-        this.userSessions.set(userId, session);
-        log.info({ userId, username, sessionId: session.sessionId }, '新建 Telegram 用户会话');
-      }
-
-      // 更新 chatId（用户可能从不同的 chat 发消息）
-      session.chatId = chatId;
-
-      // 持久化 chatId 到 session 元数据，确保重启后可恢复
-      this.sessionManager.setSessionChannelData(session.sessionId, {
-        chatId,
-        telegramUserId: userId,
-        username,
-      });
 
       log.debug({ userId, text: text.substring(0, 100) }, '收到 Telegram 消息');
 
