@@ -85,6 +85,8 @@ function loadEnvFile(): void {
  * - ANTHROPIC_API_KEY: Anthropic API Key
  * - TELEGRAM_BOT_TOKEN: Telegram Bot Token
  * - DISCORD_BOT_TOKEN: Discord Bot Token
+ * - PORT: Web 通道端口（Railway 等云平台自动设置，同时自动绑定 0.0.0.0）
+ * - SOPHON_WEB_HOST: Web 通道绑定地址（默认 localhost，有 PORT 时默认 0.0.0.0）
  */
 function getEnvOverrides(): Record<string, unknown> {
   const overrides: Record<string, unknown> = {};
@@ -135,6 +137,25 @@ function getEnvOverrides(): Record<string, unknown> {
   if (process.env['DISCORD_BOT_TOKEN']) {
     channels['discord'] = { enabled: true, token: process.env['DISCORD_BOT_TOKEN'] };
   }
+
+  // Web 通道：支持 PORT 环境变量（Railway 等云平台自动设置）
+  // 当 PORT 存在时，自动启用 web 通道并绑定 0.0.0.0（允许外部访问）
+  if (process.env['PORT']) {
+    const port = parseInt(process.env['PORT'], 10);
+    if (!isNaN(port)) {
+      channels['web'] = {
+        enabled: true,
+        port,
+        host: process.env['SOPHON_WEB_HOST'] || '0.0.0.0',
+      };
+    }
+  } else if (process.env['SOPHON_WEB_HOST']) {
+    channels['web'] = {
+      ...(channels['web'] as Record<string, unknown> | undefined),
+      host: process.env['SOPHON_WEB_HOST'],
+    };
+  }
+
   if (Object.keys(channels).length > 0) {
     overrides['channels'] = channels;
   }
