@@ -262,6 +262,24 @@ export class TelegramChannel implements Channel {
         }
       }
 
+      // 3. 兜底：从 sessionId 提取 chatId（Telegram 私聊中 chatId === userId）
+      //    处理 channelData 尚未持久化的历史 session（如升级前创建的 session）
+      if (chatId === undefined && sessionId.startsWith('tg-')) {
+        const telegramUserId = sessionId.slice(3); // 去掉 'tg-' 前缀
+        const parsed = Number(telegramUserId);
+        if (!isNaN(parsed)) {
+          chatId = parsed;
+          log.info({ sessionId, chatId }, '从 sessionId 推断 Telegram chatId（兜底）');
+
+          // 恢复到内存映射并持久化，后续消息无需再走兜底逻辑
+          this.userSessions.set(telegramUserId, { sessionId, chatId });
+          this.sessionManager.setSessionChannelData(sessionId, {
+            chatId,
+            telegramUserId,
+          });
+        }
+      }
+
       if (chatId === undefined) {
         log.warn({ sessionId }, '未找到对应的 Telegram 用户会话（内存和持久化均无记录）');
         return;
