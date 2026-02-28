@@ -52,32 +52,16 @@ async function loadConfigFile(configPath: string): Promise<Record<string, unknow
  * 加载 .env 文件并注入到 process.env
  * 
  * 使用 dotenv 库，默认不覆盖已有的环境变量。
- * 同时支持 .env.local 作为本地覆盖。
+ * 文件不存在时跳过（如 Railway 等云平台直接通过系统环境变量注入）。
  */
 function loadEnvFile(): void {
-  let loaded = false;
-
-  // .env.local 优先级更高，先加载
-  const localPath = resolve('.env.local');
-  if (existsSync(localPath)) {
-    const localResult = dotenvConfig({ path: localPath });
-    if (localResult.parsed) {
-      log.info({ count: Object.keys(localResult.parsed).length }, '已加载 .env.local');
-      loaded = true;
-    }
-  }
-
-  // .env
   const envPath = resolve('.env');
   if (existsSync(envPath)) {
     const result = dotenvConfig({ path: envPath });
     if (result.parsed) {
       log.info({ count: Object.keys(result.parsed).length }, '已加载 .env');
-      loaded = true;
     }
-  }
-
-  if (!loaded) {
+  } else {
     log.debug('未找到 .env 文件，跳过（使用系统环境变量）');
   }
 }
