@@ -296,12 +296,25 @@
       margin: 0 auto;
     }
 
-    .input-wrapper textarea {
+    .input-box {
       flex: 1;
+      display: flex;
+      align-items: flex-end;
       background: var(--bg-input);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 12px 16px;
+      transition: border-color 0.15s;
+    }
+
+    .input-box:focus-within {
+      border-color: var(--accent);
+    }
+
+    .input-box textarea {
+      flex: 1;
+      background: transparent;
+      border: none;
+      padding: 12px 14px 12px 0;
       color: var(--text-primary);
       font-size: 14px;
       font-family: inherit;
@@ -310,14 +323,9 @@
       line-height: 1.5;
       max-height: 150px;
       min-height: 44px;
-      transition: border-color 0.15s;
     }
 
-    .input-wrapper textarea:focus {
-      border-color: var(--accent);
-    }
-
-    .input-wrapper textarea::placeholder {
+    .input-box textarea::placeholder {
       color: var(--text-muted);
     }
 
@@ -347,36 +355,38 @@
       color: var(--text-muted);
     }
 
-    /* 菜单按钮 */
+    /* 菜单按钮（输入框内前缀） */
     .menu-container {
       position: relative;
       flex-shrink: 0;
+      display: flex;
+      align-items: flex-end;
     }
 
     .menu-btn {
-      width: 44px;
+      width: 40px;
       height: 44px;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      color: var(--text-secondary);
-      font-size: 20px;
+      background: transparent;
+      border: none;
+      border-right: 1px solid var(--border);
+      border-radius: 0;
+      color: var(--text-muted);
+      font-size: 18px;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.15s;
+      transition: color 0.15s;
     }
 
     .menu-btn:hover {
-      border-color: var(--accent);
       color: var(--accent);
     }
 
     .menu-dropdown {
       display: none;
       position: absolute;
-      bottom: calc(100% + 8px);
+      bottom: calc(100% + 12px);
       left: 0;
       background: var(--bg-secondary);
       border: 1px solid var(--border);
@@ -616,28 +626,30 @@
 
   <div class="input-area">
     <div class="input-wrapper">
-      <div class="menu-container">
-        <button class="menu-btn" id="menuBtn" title="菜单">☰</button>
-        <div class="menu-dropdown" id="menuDropdown">
-          <button class="menu-item" onclick="sendCommand('/help')">
-            <span class="menu-icon">📖</span>帮助
-          </button>
-          <button class="menu-item" onclick="sendCommand('/tools')">
-            <span class="menu-icon">🔧</span>工具列表
-          </button>
-          <button class="menu-item" onclick="sendCommand('/status')">
-            <span class="menu-icon">📊</span>状态
-          </button>
-          <button class="menu-item" onclick="sendCommand('/whoami')">
-            <span class="menu-icon">👤</span>我的身份
-          </button>
+      <div class="input-box">
+        <div class="menu-container">
+          <button class="menu-btn" id="menuBtn" title="菜单">☰</button>
+          <div class="menu-dropdown" id="menuDropdown">
+            <button class="menu-item" onclick="sendCommand('/help')">
+              <span class="menu-icon">📖</span>帮助
+            </button>
+            <button class="menu-item" onclick="sendCommand('/tools')">
+              <span class="menu-icon">🔧</span>工具列表
+            </button>
+            <button class="menu-item" onclick="sendCommand('/status')">
+              <span class="menu-icon">📊</span>状态
+            </button>
+            <button class="menu-item" onclick="sendCommand('/whoami')">
+              <span class="menu-icon">👤</span>我的身份
+            </button>
+          </div>
         </div>
+        <textarea
+          id="messageInput"
+          placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+          rows="1"
+        ></textarea>
       </div>
-      <textarea
-        id="messageInput"
-        placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
-        rows="1"
-      ></textarea>
       <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
         ↑
       </button>
