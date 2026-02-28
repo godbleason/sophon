@@ -290,8 +290,6 @@
 
     .input-wrapper {
       display: flex;
-      gap: 10px;
-      align-items: flex-end;
       max-width: 900px;
       margin: 0 auto;
     }
@@ -314,7 +312,7 @@
       flex: 1;
       background: transparent;
       border: none;
-      padding: 12px 14px 12px 0;
+      padding: 12px 14px;
       color: var(--text-primary);
       font-size: 14px;
       font-family: inherit;
@@ -331,28 +329,30 @@
 
     .send-btn {
       width: 44px;
-      height: 44px;
-      background: var(--accent);
+      min-height: 44px;
+      background: transparent;
       border: none;
-      border-radius: 12px;
-      color: #fff;
+      border-radius: 0 11px 11px 0;
+      color: var(--accent);
       font-size: 18px;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: background 0.15s;
+      transition: all 0.15s;
       flex-shrink: 0;
+      align-self: stretch;
     }
 
     .send-btn:hover {
-      background: var(--accent-hover);
+      color: var(--accent-hover);
+      background: rgba(99, 102, 241, 0.1);
     }
 
     .send-btn:disabled {
-      background: var(--bg-tertiary);
       cursor: not-allowed;
       color: var(--text-muted);
+      background: transparent;
     }
 
     /* 菜单按钮（输入框内前缀） */
@@ -360,12 +360,11 @@
       position: relative;
       flex-shrink: 0;
       display: flex;
-      align-items: flex-end;
+      align-items: stretch;
     }
 
     .menu-btn {
       width: 40px;
-      height: 44px;
       background: transparent;
       border: none;
       border-right: 1px solid var(--border);
@@ -649,10 +648,10 @@
           placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
           rows="1"
         ></textarea>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
+          ↑
+        </button>
       </div>
-      <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
-        ↑
-      </button>
     </div>
   </div>
 
