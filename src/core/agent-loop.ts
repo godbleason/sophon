@@ -328,7 +328,12 @@ export class AgentLoop {
     log.info({ sessionId, channel, textLength: text.length }, '处理消息');
 
       // 添加用户消息到会话
-      const userMessage: ChatMessage = { role: 'user', content: text };
+      const isScheduledTask = !!message.metadata?.['scheduledTaskId'];
+      const userMessage: ChatMessage = {
+        role: 'user',
+        content: text,
+        ...(isScheduledTask ? { metadata: { source: 'scheduler' } } : {}),
+      };
       await this.sessionManager.addMessage(sessionId, userMessage);
 
       // 获取历史消息

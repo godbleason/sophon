@@ -33,6 +33,8 @@ export interface ChatMessage {
   toolCallId?: string;
   /** tool 消息的工具名称 */
   name?: string;
+  /** 附加元数据（不影响 LLM 交互，仅用于内部标记，如消息来源） */
+  metadata?: Record<string, unknown>;
 }
 
 /** 入站消息（从通道到代理） */

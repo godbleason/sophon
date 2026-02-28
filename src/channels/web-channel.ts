@@ -330,7 +330,9 @@ export class WebChannel implements Channel {
       const msg = messages[i];
 
       if (msg.role === 'user') {
-        if (typeof msg.content === 'string' && msg.content.trim().length > 0) {
+        // 跳过 scheduler 触发的消息（非真实用户输入）
+        const isScheduler = msg.metadata?.['source'] === 'scheduler';
+        if (!isScheduler && typeof msg.content === 'string' && msg.content.trim().length > 0) {
           result.push({ role: 'user', content: msg.content });
         }
         i++;
