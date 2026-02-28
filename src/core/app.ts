@@ -118,6 +118,9 @@ export class SophonApp {
   async start(): Promise<void> {
     log.info('启动 Sophon...');
 
+    // 初始化 Session 元数据索引（从磁盘恢复 userId/channel 映射）
+    await this.sessionManager.init();
+
     // 初始化用户系统
     await this.userStore.init();
     log.info({ userCount: this.userStore.size }, '用户系统已初始化');
@@ -246,6 +249,7 @@ export class SophonApp {
       this.channels.push(
         new TelegramChannel({
           messageBus: this.messageBus,
+          sessionManager: this.sessionManager,
           token: channels.telegram.token,
           allowedUsers: channels.telegram.allowedUsers,
         }),

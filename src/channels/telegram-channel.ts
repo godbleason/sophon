@@ -9,6 +9,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import { randomUUID } from 'node:crypto';
 import type { ChannelName, OutboundMessage } from '../types/message.js';
 import type { MessageBus } from '../core/message-bus.js';
+import type { SessionManager } from '../core/session-manager.js';
 import type { Channel } from './base-channel.js';
 import { createChildLogger } from '../core/logger.js';
 
@@ -17,6 +18,7 @@ const log = createChildLogger('TelegramChannel');
 /** Telegram 通道配置 */
 interface TelegramChannelConfig {
   messageBus: MessageBus;
+  sessionManager: SessionManager;
   /** Bot Token（从 @BotFather 获取） */
   token: string;
   /** 允许交互的用户 ID 或用户名白名单，为空则允许所有人 */
@@ -40,6 +42,7 @@ export class TelegramChannel implements Channel {
   readonly name: ChannelName = 'telegram';
 
   private readonly messageBus: MessageBus;
+  private readonly sessionManager: SessionManager;
   private readonly token: string;
   private readonly allowedUsers: Set<string>;
   private bot: TelegramBot | null = null;
@@ -48,6 +51,7 @@ export class TelegramChannel implements Channel {
 
   constructor(config: TelegramChannelConfig) {
     this.messageBus = config.messageBus;
+    this.sessionManager = config.sessionManager;
     this.token = config.token;
     this.allowedUsers = new Set(config.allowedUsers);
   }
@@ -180,6 +184,13 @@ export class TelegramChannel implements Channel {
       // 更新 chatId（用户可能从不同的 chat 发消息）
       session.chatId = chatId;
 
+      // 持久化 chatId 到 session 元数据，确保重启后可恢复
+      this.sessionManager.setSessionChannelData(session.sessionId, {
+        chatId,
+        telegramUserId: userId,
+        username,
+      });
+
       log.debug({ userId, text: text.substring(0, 100) }, '收到 Telegram 消息');
 
       // 发送"正在输入"提示
@@ -220,22 +231,41 @@ export class TelegramChannel implements Channel {
     try {
       const { sessionId, text } = message;
 
-      // 找到对应 session 的用户
-      let targetSession: UserSession | undefined;
+      // 1. 先从内存映射查找
+      let chatId: number | undefined;
       for (const session of this.userSessions.values()) {
         if (session.sessionId === sessionId) {
-          targetSession = session;
+          chatId = session.chatId;
           break;
         }
       }
 
-      if (!targetSession) {
-        log.warn({ sessionId }, '未找到对应的 Telegram 用户会话');
+      // 2. 内存找不到时，从持久化的 session 元数据恢复（重启后的场景）
+      if (chatId === undefined) {
+        const channelData = this.sessionManager.getSessionChannelData(sessionId);
+        if (channelData && typeof channelData['chatId'] === 'number') {
+          chatId = channelData['chatId'] as number;
+          log.info({ sessionId, chatId }, '从持久化元数据恢复 Telegram chatId');
+
+          // 同步恢复到内存映射
+          const telegramUserId = channelData['telegramUserId'] as string | undefined;
+          if (telegramUserId) {
+            this.userSessions.set(telegramUserId, {
+              sessionId,
+              chatId,
+              username: channelData['username'] as string | undefined,
+            });
+          }
+        }
+      }
+
+      if (chatId === undefined) {
+        log.warn({ sessionId }, '未找到对应的 Telegram 用户会话（内存和持久化均无记录）');
         return;
       }
 
       // 发送回复（自动分段处理长文本）
-      await this.sendLongMessage(targetSession.chatId, text);
+      await this.sendLongMessage(chatId, text);
     } catch (err) {
       // 捕获所有异常，防止出站消息处理失败导致进程崩溃
       log.error({ err, sessionId: message.sessionId }, '处理 Telegram 出站消息时发生异常');

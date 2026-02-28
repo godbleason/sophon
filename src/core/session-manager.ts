@@ -6,6 +6,7 @@
  * 目录结构（以 session 为中心）：
  *   <storageDir>/<sessionId>/
  *     history.jsonl      - 对话历史（JSONL 格式）
+ *     meta.json           - 会话元数据（userId、channel 等，用于重启恢复）
  *     workspace/          - 工具执行产生的文件
  *     schedules.json      - 定时任务（由 Scheduler 管理）
  */
@@ -20,7 +21,18 @@ import { createChildLogger } from './logger.js';
 
 const log = createChildLogger('SessionManager');
 
-/** 会话元数据 */
+/** 持久化的会话元数据（存储到 meta.json） */
+interface PersistedMeta {
+  id: string;
+  channel: string;
+  userId?: string;
+  createdAt: number;
+  updatedAt: number;
+  /** 通道特定数据（如 Telegram 的 chatId） */
+  channelData?: Record<string, unknown>;
+}
+
+/** 会话元数据（运行时） */
 interface SessionMeta {
   id: string;
   createdAt: number;
@@ -29,6 +41,8 @@ interface SessionMeta {
   messageCount: number;
   /** 关联的用户 ID */
   userId?: string;
+  /** 通道特定数据（如 Telegram 的 chatId） */
+  channelData?: Record<string, unknown>;
 }
 
 /** 会话数据 */
@@ -41,10 +55,47 @@ interface Session {
  * 会话管理器
  */
 export class SessionManager {
-  /** 内存缓存 */
+  /** 内存缓存（包含完整消息历史的 session） */
   private readonly sessions = new Map<string, Session>();
+  /** 元数据索引（仅元数据，不含消息历史，启动时预加载） */
+  private readonly metaIndex = new Map<string, SessionMeta>();
 
   constructor(private readonly config: SessionConfig) {}
+
+  /**
+   * 初始化：扫描所有 session 目录，加载元数据索引
+   * 
+   * 在应用启动时调用。只加载 meta.json（轻量），不加载 history.jsonl。
+   * 这确保 findSessionsByUser 能在重启后立即找到所有用户的 session。
+   */
+  async init(): Promise<void> {
+    const sessionIds = await this.listSessionDirs();
+    let loadedCount = 0;
+
+    for (const sessionId of sessionIds) {
+      const metaFilePath = this.getMetaFilePath(sessionId);
+      if (existsSync(metaFilePath)) {
+        try {
+          const content = await readFile(metaFilePath, 'utf-8');
+          const persisted = JSON.parse(content) as PersistedMeta;
+          this.metaIndex.set(sessionId, {
+            id: persisted.id,
+            channel: persisted.channel,
+            userId: persisted.userId,
+            createdAt: persisted.createdAt,
+            updatedAt: persisted.updatedAt,
+            messageCount: 0, // 实际数量在完整加载时更新
+            channelData: persisted.channelData,
+          });
+          loadedCount++;
+        } catch (err) {
+          log.warn({ err, sessionId }, '加载 session 元数据失败，跳过');
+        }
+      }
+    }
+
+    log.info({ totalDirs: sessionIds.length, loadedMetas: loadedCount }, 'Session 元数据索引已加载');
+  }
 
   /**
    * 获取或创建会话
@@ -53,6 +104,10 @@ export class SessionManager {
     // 先从内存缓存获取
     const cached = this.sessions.get(sessionId);
     if (cached) {
+      // 如果传入的 channel 更具体（非 'unknown'），更新一下
+      if (channel !== 'cli' && cached.meta.channel === 'unknown') {
+        cached.meta.channel = channel;
+      }
       return cached;
     }
 
@@ -60,8 +115,26 @@ export class SessionManager {
     const historyFile = this.getHistoryFilePath(sessionId);
     if (existsSync(historyFile)) {
       const session = await this.loadFromFile(sessionId, historyFile);
+      // 从 metaIndex 恢复 userId、channel 和 channelData
+      const indexedMeta = this.metaIndex.get(sessionId);
+      if (indexedMeta) {
+        if (indexedMeta.userId) {
+          session.meta.userId = indexedMeta.userId;
+        }
+        if (indexedMeta.channel && indexedMeta.channel !== 'unknown') {
+          session.meta.channel = indexedMeta.channel;
+        }
+        if (indexedMeta.channelData) {
+          session.meta.channelData = indexedMeta.channelData;
+        }
+      }
+      // 传入的 channel 参数优先（它来自实际的通道连接）
+      if (channel !== 'cli') {
+        session.meta.channel = channel;
+      }
       this.sessions.set(sessionId, session);
-      log.info({ sessionId, messageCount: session.messages.length }, '已加载会话');
+      this.metaIndex.set(sessionId, { ...session.meta });
+      log.info({ sessionId, messageCount: session.messages.length, userId: session.meta.userId }, '已加载会话');
       return session;
     }
 
@@ -83,17 +156,37 @@ export class SessionManager {
     };
 
     this.sessions.set(sessionId, session);
+    this.metaIndex.set(sessionId, { ...session.meta });
+    // 持久化元数据
+    await this.saveMetaFile(sessionId, session.meta);
     log.info({ sessionId, sessionDir }, '已创建新会话');
     return session;
   }
 
   /**
    * 为会话关联用户
+   * 
+   * 同时更新 metaIndex 并持久化到 meta.json，确保重启后可恢复。
    */
   setSessionUser(sessionId: string, userId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
       session.meta.userId = userId;
+      // 同步更新 metaIndex
+      this.metaIndex.set(sessionId, { ...session.meta });
+      // 异步持久化，不阻塞主流程
+      this.saveMetaFile(sessionId, session.meta).catch((err) => {
+        log.error({ err, sessionId }, '持久化 session 元数据失败');
+      });
+    } else {
+      // session 未在内存中，但 metaIndex 可能有记录
+      const meta = this.metaIndex.get(sessionId);
+      if (meta) {
+        meta.userId = userId;
+        this.saveMetaFile(sessionId, meta).catch((err) => {
+          log.error({ err, sessionId }, '持久化 session 元数据失败');
+        });
+      }
     }
   }
 
@@ -101,7 +194,40 @@ export class SessionManager {
    * 获取会话关联的用户 ID
    */
   getSessionUserId(sessionId: string): string | undefined {
-    return this.sessions.get(sessionId)?.meta.userId;
+    return this.sessions.get(sessionId)?.meta.userId
+      ?? this.metaIndex.get(sessionId)?.userId;
+  }
+
+  /**
+   * 设置通道特定数据（如 Telegram 的 chatId）
+   * 
+   * 同时更新内存和 metaIndex，并持久化到 meta.json。
+   */
+  setSessionChannelData(sessionId: string, data: Record<string, unknown>): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.meta.channelData = { ...session.meta.channelData, ...data };
+      this.metaIndex.set(sessionId, { ...session.meta });
+      this.saveMetaFile(sessionId, session.meta).catch((err) => {
+        log.error({ err, sessionId }, '持久化 session channelData 失败');
+      });
+    } else {
+      const meta = this.metaIndex.get(sessionId);
+      if (meta) {
+        meta.channelData = { ...meta.channelData, ...data };
+        this.saveMetaFile(sessionId, meta).catch((err) => {
+          log.error({ err, sessionId }, '持久化 session channelData 失败');
+        });
+      }
+    }
+  }
+
+  /**
+   * 获取通道特定数据
+   */
+  getSessionChannelData(sessionId: string): Record<string, unknown> | undefined {
+    return this.sessions.get(sessionId)?.meta.channelData
+      ?? this.metaIndex.get(sessionId)?.channelData;
   }
 
 
@@ -207,19 +333,32 @@ export class SessionManager {
   }
 
   /**
-   * 查找用户的所有活跃 session
+   * 查找用户的所有 session
    *
-   * 遍历内存中的所有 session，返回关联到指定 userId 的 session 列表。
+   * 首先搜索内存中的活跃 session，然后搜索 metaIndex（磁盘恢复的元数据）。
+   * 这确保即使目标用户的 session 尚未被完整加载到内存中（如服务重启后），
+   * 也能通过持久化的 meta.json 找到。
+   *
    * 一个用户可能在多个通道上有多个 session。
    */
   findSessionsByUser(userId: string): SessionMeta[] {
-    const result: SessionMeta[] = [];
+    const found = new Map<string, SessionMeta>();
+
+    // 优先从内存 session 中查找（数据最新）
     for (const session of this.sessions.values()) {
       if (session.meta.userId === userId) {
-        result.push({ ...session.meta });
+        found.set(session.meta.id, { ...session.meta });
       }
     }
-    return result;
+
+    // 补充从 metaIndex 中查找（覆盖未被完整加载的 session）
+    for (const meta of this.metaIndex.values()) {
+      if (meta.userId === userId && !found.has(meta.id)) {
+        found.set(meta.id, { ...meta });
+      }
+    }
+
+    return Array.from(found.values());
   }
 
   /**
@@ -286,6 +425,31 @@ export class SessionManager {
   /** 获取历史文件路径 */
   private getHistoryFilePath(sessionId: string): string {
     return join(this.getSessionDir(sessionId), 'history.jsonl');
+  }
+
+  /** 获取元数据文件路径 */
+  private getMetaFilePath(sessionId: string): string {
+    return join(this.getSessionDir(sessionId), 'meta.json');
+  }
+
+  /** 持久化 session 元数据到 meta.json */
+  private async saveMetaFile(sessionId: string, meta: SessionMeta): Promise<void> {
+    await this.ensureSessionDir(sessionId);
+    const filePath = this.getMetaFilePath(sessionId);
+    const persisted: PersistedMeta = {
+      id: meta.id,
+      channel: meta.channel,
+      userId: meta.userId,
+      createdAt: meta.createdAt,
+      updatedAt: meta.updatedAt,
+      channelData: meta.channelData,
+    };
+    try {
+      await writeFile(filePath, JSON.stringify(persisted, null, 2), 'utf-8');
+    } catch (err) {
+      log.error({ err, sessionId }, '写入 meta.json 失败');
+      throw new SessionError(sessionId, '写入 meta.json 失败', { cause: err as Error });
+    }
   }
 
   /** 确保 session 目录存在 */
