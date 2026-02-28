@@ -620,6 +620,10 @@
           if (data.history && data.history.length > 0) {
             if (welcomeEl) welcomeEl.style.display = 'none';
             for (const msg of data.history) {
+              // assistant 消息可能附带思维链步骤
+              if (msg.role === 'assistant' && msg.thinkingSteps && msg.thinkingSteps.length > 0) {
+                addCollapsedProgressGroup(msg.thinkingSteps);
+              }
               addMessage(msg.role, msg.content);
             }
           }
@@ -651,7 +655,7 @@
         headerEl.className = 'progress-header';
         headerEl.innerHTML = '<span class="chevron">▶</span><span class="progress-summary">🧠 思考过程</span>';
         headerEl.addEventListener('click', () => {
-          toggleProgressGroup(currentProgressEl || headerEl.parentElement);
+          toggleProgressGroup(headerEl.parentElement);
         });
         currentProgressEl.appendChild(headerEl);
 
@@ -761,6 +765,67 @@
       return step;
     }
 
+    /**
+     * 从历史数据中创建一个已折叠的思维链组（刷新页面后恢复用）
+     */
+    function addCollapsedProgressGroup(thinkingSteps) {
+      const groupEl = document.createElement('div');
+      groupEl.className = 'progress-group collapsed';
+
+      // 折叠头部
+      const headerEl = document.createElement('div');
+      headerEl.className = 'progress-header';
+
+      // 统计工具调用
+      const toolCalls = thinkingSteps.filter(s => s.type === 'tool_call');
+      const toolCount = toolCalls.length;
+      let summaryText = '🧠 思考过程';
+      if (toolCount > 0) {
+        const uniqueNames = [...new Set(toolCalls.map(s => s.toolName).filter(Boolean))];
+        summaryText += ' · ' + toolCount + ' 次工具调用'
+          + (uniqueNames.length > 0 ? ' (' + uniqueNames.join(', ') + ')' : '');
+      } else {
+        summaryText += ' · ' + thinkingSteps.length + ' 步';
+      }
+
+      headerEl.innerHTML = '<span class="chevron">▶</span><span class="progress-summary">'
+        + escapeHtml(summaryText) + '</span>';
+      headerEl.addEventListener('click', () => {
+        toggleProgressGroup(headerEl.parentElement);
+      });
+      groupEl.appendChild(headerEl);
+
+      // 步骤内容区
+      const stepsEl = document.createElement('div');
+      stepsEl.className = 'progress-steps';
+
+      for (const step of thinkingSteps) {
+        if (step.type === 'tool_call') {
+          const textEl = document.createElement('span');
+          textEl.className = 'progress-step-text';
+          textEl.innerHTML = '调用工具 <span class="tool-name">' + escapeHtml(step.toolName || '') + '</span>'
+            + (step.toolArgs ? '<span class="tool-args">' + escapeHtml(truncate(step.toolArgs, 200)) + '</span>' : '');
+          const stepEl = createStepElRaw('🔧', textEl);
+          stepsEl.appendChild(stepEl);
+        } else if (step.type === 'tool_result') {
+          const icon = step.isError ? '❌' : '✅';
+          const textEl = document.createElement('span');
+          textEl.className = 'progress-step-text';
+          let html = escapeHtml(step.toolName || '工具结果');
+          if (step.content) {
+            html += '<span class="tool-result' + (step.isError ? ' error' : '') + '">'
+              + escapeHtml(truncate(step.content, 500)) + '</span>';
+          }
+          textEl.innerHTML = html;
+          const stepEl = createStepElRaw(icon, textEl);
+          stepsEl.appendChild(stepEl);
+        }
+      }
+
+      groupEl.appendChild(stepsEl);
+      messagesEl.insertBefore(groupEl, typingIndicator);
+    }
+
     function finalizeProgress() {
       if (currentProgressEl) {
         // 标记所有 active 为完成
@@ -795,14 +860,6 @@
 
         // 自动折叠
         currentProgressEl.classList.add('collapsed');
-
-        // 解除引用前保存给 header 的点击事件用
-        const savedGroup = currentProgressEl;
-        const headerEl = savedGroup.querySelector('.progress-header');
-        if (headerEl) {
-          // 重新绑定，确保闭包引用正确的 group
-          headerEl.onclick = () => toggleProgressGroup(savedGroup);
-        }
 
         currentProgressEl = null;
         progressStepCount = 0;

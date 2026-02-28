@@ -14,6 +14,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { ChannelName, OutboundMessage, ProgressMessage } from '../types/message.js';
 import type { MessageBus } from '../core/message-bus.js';
 import type { SessionManager } from '../core/session-manager.js';
+import type { UserStore } from '../core/user-store.js';
 import type { Channel } from './base-channel.js';
 import { createChildLogger } from '../core/logger.js';
 import { getChatPageHTML } from './web-chat-ui.js';
@@ -24,6 +25,7 @@ const log = createChildLogger('WebChannel');
 interface WebChannelConfig {
   messageBus: MessageBus;
   sessionManager: SessionManager;
+  userStore: UserStore;
   port?: number;
   host?: string;
 }
@@ -55,6 +57,7 @@ export class WebChannel implements Channel {
 
   private readonly messageBus: MessageBus;
   private readonly sessionManager: SessionManager;
+  private readonly userStore: UserStore;
   private readonly port: number;
   private readonly host: string;
   private httpServer: Server | null = null;
@@ -65,6 +68,7 @@ export class WebChannel implements Channel {
   constructor(config: WebChannelConfig) {
     this.messageBus = config.messageBus;
     this.sessionManager = config.sessionManager;
+    this.userStore = config.userStore;
     this.port = config.port || 3000;
     this.host = config.host || 'localhost';
   }
@@ -265,6 +269,12 @@ export class WebChannel implements Channel {
     // 确保 session 已创建（如果已存在则从磁盘恢复）
     await this.sessionManager.getOrCreate(sessionId, 'web');
 
+    // 立即关联用户身份，确保即使用户未发消息也能被其他用户找到
+    const displayName = `Web User (${sessionId})`;
+    const user = await this.userStore.getOrCreateByChannel('web', clientId, displayName);
+    this.sessionManager.setSessionUser(sessionId, user.id);
+    log.debug({ sessionId, userId: user.id }, '连接时已关联用户');
+
     // 获取历史对话消息用于前端恢复
     const history = this.buildClientHistory(sessionId);
 
@@ -280,40 +290,124 @@ export class WebChannel implements Channel {
   /**
    * 构建前端可显示的历史消息列表
    * 
-   * 只提取 user 和「最终」assistant 消息，跳过：
-   * - system / tool 等内部消息
-   * - 内容为空的消息
-   * - 带 toolCalls 的 assistant 消息（中间态，LLM 思考后调用工具）
+   * 将消息按 "turn"（一轮对话）分组：
+   * - user 消息直接输出
+   * - assistant 消息如果有工具调用链，收集所有中间步骤作为 thinkingSteps，
+   *   连同最终回复一起返回，前端可据此渲染折叠的思维链
    * 
    * 限制最多返回最近 50 条，避免前端一次性渲染过多。
    */
-  private buildClientHistory(sessionId: string): Array<{ role: string; content: string }> {
+  private buildClientHistory(
+    sessionId: string,
+  ): Array<{
+    role: string;
+    content: string;
+    thinkingSteps?: Array<{
+      type: string;
+      toolName?: string;
+      toolArgs?: string;
+      content?: string;
+      isError?: boolean;
+    }>;
+  }> {
     const messages = this.sessionManager.getFullHistory(sessionId);
     if (messages.length === 0) return [];
 
-    const displayMessages: Array<{ role: string; content: string }> = [];
+    const result: Array<{
+      role: string;
+      content: string;
+      thinkingSteps?: Array<{
+        type: string;
+        toolName?: string;
+        toolArgs?: string;
+        content?: string;
+        isError?: boolean;
+      }>;
+    }> = [];
 
-    for (const msg of messages) {
+    let i = 0;
+    while (i < messages.length) {
+      const msg = messages[i];
+
       if (msg.role === 'user') {
         if (typeof msg.content === 'string' && msg.content.trim().length > 0) {
-          displayMessages.push({ role: 'user', content: msg.content });
+          result.push({ role: 'user', content: msg.content });
         }
+        i++;
       } else if (msg.role === 'assistant') {
-        // 跳过带 toolCalls 的中间态消息（LLM 思考后调工具，非最终回复）
-        if (msg.toolCalls && msg.toolCalls.length > 0) continue;
-        // 跳过空内容
-        if (typeof msg.content !== 'string' || msg.content.trim().length === 0) continue;
-        displayMessages.push({ role: 'assistant', content: msg.content });
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+          // 中间态 assistant 消息 → 收集 thinking steps
+          const thinkingSteps: Array<{
+            type: string;
+            toolName?: string;
+            toolArgs?: string;
+            content?: string;
+            isError?: boolean;
+          }> = [];
+
+          while (i < messages.length) {
+            const current = messages[i];
+
+            if (current.role === 'assistant' && current.toolCalls && current.toolCalls.length > 0) {
+              // 工具调用步骤
+              for (const tc of current.toolCalls) {
+                thinkingSteps.push({
+                  type: 'tool_call',
+                  toolName: tc.name,
+                  toolArgs: typeof tc.arguments === 'string'
+                    ? tc.arguments
+                    : JSON.stringify(tc.arguments),
+                });
+              }
+              i++;
+            } else if (current.role === 'tool') {
+              // 工具结果步骤
+              thinkingSteps.push({
+                type: 'tool_result',
+                toolName: current.name,
+                content: typeof current.content === 'string' ? current.content : '',
+                isError: false,
+              });
+              i++;
+            } else if (
+              current.role === 'assistant'
+              && (!current.toolCalls || current.toolCalls.length === 0)
+            ) {
+              // 最终 assistant 回复
+              if (typeof current.content === 'string' && current.content.trim().length > 0) {
+                result.push({
+                  role: 'assistant',
+                  content: current.content,
+                  thinkingSteps: thinkingSteps.length > 0 ? thinkingSteps : undefined,
+                });
+              }
+              i++;
+              break;
+            } else {
+              // 遇到 user 或其他角色，中断
+              break;
+            }
+          }
+        } else {
+          // 直接 assistant 回复（无工具调用）
+          if (typeof msg.content === 'string' && msg.content.trim().length > 0) {
+            result.push({ role: 'assistant', content: msg.content });
+          }
+          i++;
+        }
+      } else {
+        // system / tool（孤立的）等跳过
+        i++;
       }
     }
 
     // 最多返回最近 50 条
     const MAX_HISTORY = 50;
-    if (displayMessages.length > MAX_HISTORY) {
-      return displayMessages.slice(-MAX_HISTORY);
+    if (result.length > MAX_HISTORY) {
+      return result.slice(-MAX_HISTORY);
     }
 
-    return displayMessages;
+    return result;
   }
 
   /**
