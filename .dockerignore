@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output (rebuilt in Docker)
+dist/
+
+# Data (should be mounted as volume)
+data/
+
+# Dev files
+.git/
+.gitignore
+.env
+.env.local
+*.log
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+
+# Docs (not needed at runtime)
+docs/
+README.md
+
+# Tests
+**/*.test.ts
+vitest.config.*
