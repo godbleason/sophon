@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import type { ChannelName, OutboundMessage } from '../types/message.js';
 import type { MessageBus } from '../core/message-bus.js';
 import type { SessionManager } from '../core/session-manager.js';
+import type { UserStore } from '../core/user-store.js';
 import type { Channel } from './base-channel.js';
 import { createChildLogger } from '../core/logger.js';
 
@@ -19,6 +20,7 @@ const log = createChildLogger('TelegramChannel');
 interface TelegramChannelConfig {
   messageBus: MessageBus;
   sessionManager: SessionManager;
+  userStore: UserStore;
   /** Bot Token（从 @BotFather 获取） */
   token: string;
   /** 允许交互的用户 ID 或用户名白名单，为空则允许所有人 */
@@ -43,6 +45,7 @@ export class TelegramChannel implements Channel {
 
   private readonly messageBus: MessageBus;
   private readonly sessionManager: SessionManager;
+  private readonly userStore: UserStore;
   private readonly token: string;
   private readonly allowedUsers: Set<string>;
   private bot: TelegramBot | null = null;
@@ -52,6 +55,7 @@ export class TelegramChannel implements Channel {
   constructor(config: TelegramChannelConfig) {
     this.messageBus = config.messageBus;
     this.sessionManager = config.sessionManager;
+    this.userStore = config.userStore;
     this.token = config.token;
     this.allowedUsers = new Set(config.allowedUsers);
   }
@@ -262,21 +266,32 @@ export class TelegramChannel implements Channel {
         }
       }
 
-      // 3. 兜底：从 sessionId 提取 chatId（Telegram 私聊中 chatId === userId）
+      // 3. 兜底：通过 UserStore 的 channelBindings 推断 chatId
       //    处理 channelData 尚未持久化的历史 session（如升级前创建的 session）
-      if (chatId === undefined && sessionId.startsWith('tg-')) {
-        const telegramUserId = sessionId.slice(3); // 去掉 'tg-' 前缀
-        const parsed = Number(telegramUserId);
-        if (!isNaN(parsed)) {
-          chatId = parsed;
-          log.info({ sessionId, chatId }, '从 sessionId 推断 Telegram chatId（兜底）');
+      if (chatId === undefined) {
+        const userId = this.sessionManager.getSessionUserId(sessionId);
+        if (userId) {
+          const user = this.userStore.getById(userId);
+          if (user) {
+            const tgBinding = user.channelBindings.find((b) => b.channel === 'telegram');
+            if (tgBinding) {
+              const parsed = Number(tgBinding.channelUserId);
+              if (!isNaN(parsed)) {
+                chatId = parsed;
+                log.info(
+                  { sessionId, chatId, userId },
+                  '从 UserStore channelBindings 推断 Telegram chatId',
+                );
 
-          // 恢复到内存映射并持久化，后续消息无需再走兜底逻辑
-          this.userSessions.set(telegramUserId, { sessionId, chatId });
-          this.sessionManager.setSessionChannelData(sessionId, {
-            chatId,
-            telegramUserId,
-          });
+                // 恢复到内存映射并持久化，后续消息无需再走兜底逻辑
+                this.userSessions.set(tgBinding.channelUserId, { sessionId, chatId });
+                this.sessionManager.setSessionChannelData(sessionId, {
+                  chatId,
+                  telegramUserId: tgBinding.channelUserId,
+                });
+              }
+            }
+          }
         }
       }
 

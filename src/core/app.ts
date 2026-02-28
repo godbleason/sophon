@@ -250,6 +250,7 @@ export class SophonApp {
         new TelegramChannel({
           messageBus: this.messageBus,
           sessionManager: this.sessionManager,
+          userStore: this.userStore,
           token: channels.telegram.token,
           allowedUsers: channels.telegram.allowedUsers,
         }),
