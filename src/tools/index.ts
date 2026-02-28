@@ -18,6 +18,7 @@ import {
   CancelSubagentTool,
 } from './spawn-tool.js';
 import { SendMessageTool } from './message-tool.js';
+import { WebSearchTool, FetchUrlTool } from './web-tool.js';
 
 /**
  * 获取所有内置工具
@@ -37,6 +38,8 @@ export function getBuiltinTools(): Tool[] {
     new SubagentStatusTool(),
     new CancelSubagentTool(),
     new SendMessageTool(),
+    new WebSearchTool(),
+    new FetchUrlTool(),
   ];
 }
 
@@ -54,4 +57,6 @@ export {
   SubagentStatusTool,
   CancelSubagentTool,
   SendMessageTool,
+  WebSearchTool,
+  FetchUrlTool,
 };
