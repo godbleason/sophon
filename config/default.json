@@ -52,7 +52,7 @@
     "context7": {
       "url": "https://mcp.context7.com/mcp",
       "headers": {
-        "CONTEXT7_API_KEY": "ctx7sk-6dbe5fd4-e862-4d89-890e-01266b5634a1"
+        "Authorization": "Bearer ctx7sk-6dbe5fd4-e862-4d89-890e-01266b5634a1"
       }
     }
   },

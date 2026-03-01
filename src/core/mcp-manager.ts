@@ -285,8 +285,7 @@ export class McpManager {
    * 优先级：
    * 1. 显式指定的 transport 字段
    * 2. 有 command 字段 → stdio
-   * 3. 有 url 字段 → sse（兼容 Cursor 格式，大部分远端 MCP 服务使用 SSE）
-   * 4. 默认 stdio
+   * 3. 有 url 字段 → streamable-http（MCP 新规范推荐，Cursor / Claude Desktop 默认使用）
    * 
    * 这样 Cursor / Claude Desktop 的配置可以直接使用，无需添加 transport 字段。
    */
@@ -302,9 +301,9 @@ export class McpManager {
     if (serverConfig.command) {
       return 'stdio';
     }
-    // 有 url → sse（Cursor 的 url 格式）
+    // 有 url → streamable-http（MCP 新规范标准传输方式）
     if (serverConfig.url) {
-      return 'sse';
+      return 'streamable-http';
     }
     // 没有任何线索，报错
     throw new Error(
