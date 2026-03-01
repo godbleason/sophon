@@ -58,9 +58,9 @@ function loadEnvFile(): void {
   const envPath = resolve('.env');
   if (existsSync(envPath)) {
     const result = dotenvConfig({ path: envPath });
-    if (result.parsed) {
-      log.info({ count: Object.keys(result.parsed).length }, '已加载 .env');
-    }
+  if (result.parsed) {
+    log.info({ count: Object.keys(result.parsed).length }, '已加载 .env');
+  }
   } else {
     log.debug('未找到 .env 文件，跳过（使用系统环境变量）');
   }
