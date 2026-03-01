@@ -1,10 +1,19 @@
 /**
  * 技能加载器
  * 
- * 从技能目录加载 Markdown 格式的技能文件。
+ * 从技能目录加载技能。每个技能是一个独立的子目录，包含 SKILL.md 文件。
  * 支持 YAML frontmatter 元数据。
  * 
- * 技能文件格式:
+ * 目录结构:
+ * ```
+ * skills/
+ *   coding-assistant/
+ *     SKILL.md
+ *   web-search/
+ *     SKILL.md
+ * ```
+ * 
+ * SKILL.md 文件格式:
  * ```markdown
  * ---
  * name: skill-name
@@ -22,8 +31,8 @@
  */
 
 import { readFile, readdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('SkillsLoader');
@@ -147,6 +156,8 @@ export class SkillsLoader {
 
   /**
    * 加载所有技能
+   *
+   * 扫描技能目录下的子目录，每个子目录包含一个 SKILL.md 文件。
    */
   async loadAll(): Promise<Skill[]> {
     if (!existsSync(this.skillsDir)) {
@@ -154,18 +165,27 @@ export class SkillsLoader {
       return [];
     }
 
-    const files = await readdir(this.skillsDir);
-    const mdFiles = files.filter((f) => extname(f) === '.md');
-
+    const entries = await readdir(this.skillsDir);
     this.skills = [];
 
-    for (const file of mdFiles) {
+    for (const entry of entries) {
+      const entryPath = join(this.skillsDir, entry);
+
+      // 只处理子目录
+      if (!statSync(entryPath).isDirectory()) continue;
+
+      const skillFile = join(entryPath, 'SKILL.md');
+      if (!existsSync(skillFile)) {
+        log.debug({ dir: entry }, '跳过无 SKILL.md 的目录');
+        continue;
+      }
+
       try {
-        const skill = await this.loadSkill(join(this.skillsDir, file));
+        const skill = await this.loadSkill(skillFile, entry);
         this.skills.push(skill);
-        log.info({ name: skill.meta.name, file }, '技能已加载');
+        log.info({ name: skill.meta.name, dir: entry }, '技能已加载');
       } catch (err) {
-        log.error({ err, file }, '技能加载失败');
+        log.error({ err, dir: entry }, '技能加载失败');
         throw err;
       }
     }
@@ -176,13 +196,16 @@ export class SkillsLoader {
 
   /**
    * 加载单个技能文件
+   *
+   * @param filePath SKILL.md 文件路径
+   * @param dirName 技能目录名（用作 name 的默认值）
    */
-  private async loadSkill(filePath: string): Promise<Skill> {
+  private async loadSkill(filePath: string, dirName: string): Promise<Skill> {
     const content = await readFile(filePath, 'utf-8');
     const { meta, body } = parseFrontmatter(content);
 
     const skillMeta: SkillMeta = {
-      name: (meta['name'] as string) || filePath.split('/').pop()?.replace('.md', '') || 'unknown',
+      name: (meta['name'] as string) || dirName,
       description: (meta['description'] as string) || '',
       dependencies: meta['dependencies'] as Array<{ cli?: string; env?: string }>,
       alwaysLoad: meta['alwaysLoad'] as boolean | undefined,
