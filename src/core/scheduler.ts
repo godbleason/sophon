@@ -6,54 +6,23 @@
  * 
  * 功能：
  * - 基于 cron 表达式的定时触发
- * - 任务按 session 持久化（每个 session 目录下的 schedules.json）
- * - 应用重启后自动扫描并恢复活跃任务
+ * - 任务持久化委托给 StorageProvider
+ * - 应用重启后自动恢复活跃任务
  * - 每个 session 独立管理任务
  */
 
 import { randomUUID } from 'node:crypto';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { Cron } from 'croner';
 import type { SchedulerConfig } from '../types/config.js';
 import type { ChannelName } from '../types/message.js';
 import type { MessageBus } from './message-bus.js';
-import type { SessionManager } from './session-manager.js';
+import type { StorageProvider, ScheduledTask } from '../storage/storage-provider.js';
 import { createChildLogger } from './logger.js';
 
 const log = createChildLogger('Scheduler');
 
-/** 定时任务定义 */
-export interface ScheduledTask {
-  /** 任务唯一 ID */
-  id: string;
-  /** 所属会话 ID */
-  sessionId: string;
-  /** 来源通道 */
-  channel: ChannelName;
-  /** Cron 表达式（如 "0 9 * * *" = 每天 9 点） */
-  cronExpression: string;
-  /** 任务描述（人类可读） */
-  description: string;
-  /** 发送给 Agent 的提示词 */
-  taskPrompt: string;
-  /** 是否启用 */
-  enabled: boolean;
-  /** 创建时间戳 */
-  createdAt: number;
-  /** 上次执行时间戳 */
-  lastRunAt?: number;
-  /** 累计执行次数 */
-  runCount: number;
-  /** 创建者用户 ID（用于触发时恢复用户上下文） */
-  creatorUserId?: string;
-}
-
-/** 持久化格式（每个 session 一个文件） */
-interface ScheduleStore {
-  tasks: ScheduledTask[];
-}
+// 重导出 ScheduledTask 类型，供外部使用
+export type { ScheduledTask } from '../storage/storage-provider.js';
 
 /**
  * 定时任务调度器
@@ -61,20 +30,20 @@ interface ScheduleStore {
 export class Scheduler {
   private readonly config: SchedulerConfig;
   private readonly messageBus: MessageBus;
-  private readonly sessionManager: SessionManager;
+  private readonly storage: StorageProvider;
   /** 所有任务元数据 */
   private readonly tasks = new Map<string, ScheduledTask>();
   /** 活跃的 Cron 实例 */
   private readonly cronJobs = new Map<string, Cron>();
 
-  constructor(config: SchedulerConfig, messageBus: MessageBus, sessionManager: SessionManager) {
+  constructor(config: SchedulerConfig, messageBus: MessageBus, storage: StorageProvider) {
     this.config = config;
     this.messageBus = messageBus;
-    this.sessionManager = sessionManager;
+    this.storage = storage;
   }
 
   /**
-   * 启动调度器：扫描所有 session 目录，加载已持久化的任务并恢复 cron 调度
+   * 启动调度器：从存储加载已持久化的任务并恢复 cron 调度
    */
   async start(): Promise<void> {
     if (!this.config.enabled) {
@@ -285,31 +254,21 @@ export class Scheduler {
   }
 
   /**
-   * 扫描所有 session 目录，加载各自的 schedules.json
+   * 从存储加载所有任务
    */
   private async loadAllTasks(): Promise<void> {
-    const sessionIds = await this.sessionManager.listSessionDirs();
+    const allSchedules = await this.storage.loadAllSchedules();
     let totalLoaded = 0;
 
-    for (const sessionId of sessionIds) {
-      const filePath = this.sessionManager.getScheduleFilePath(sessionId);
-      if (!existsSync(filePath)) continue;
-
-      try {
-        const raw = await readFile(filePath, 'utf-8');
-        const store: ScheduleStore = JSON.parse(raw);
-
-        for (const task of store.tasks) {
-          this.tasks.set(task.id, task);
-          totalLoaded++;
-        }
-      } catch (err) {
-        log.error({ err, sessionId }, '加载 session 定时任务失败');
+    for (const [_sessionId, tasks] of allSchedules) {
+      for (const task of tasks) {
+        this.tasks.set(task.id, task);
+        totalLoaded++;
       }
     }
 
     if (totalLoaded > 0) {
-      log.debug({ count: totalLoaded }, '已从各 session 目录加载定时任务');
+      log.debug({ count: totalLoaded }, '已从存储加载定时任务');
     }
   }
 
@@ -326,7 +285,7 @@ export class Scheduler {
     }
 
     for (const [sessionId, tasks] of bySession) {
-      await this.writeSessionScheduleFile(sessionId, tasks);
+      await this.storage.saveSchedules(sessionId, tasks);
     }
   }
 
@@ -335,30 +294,6 @@ export class Scheduler {
    */
   private async saveSessionTasks(sessionId: string): Promise<void> {
     const tasks = this.getTasksBySession(sessionId);
-    await this.writeSessionScheduleFile(sessionId, tasks);
-  }
-
-  /**
-   * 写入 session 的 schedules.json 文件
-   */
-  private async writeSessionScheduleFile(sessionId: string, tasks: ScheduledTask[]): Promise<void> {
-    const filePath = this.sessionManager.getScheduleFilePath(sessionId);
-
-    // 确保目录存在
-    const dir = dirname(filePath);
-    if (!existsSync(dir)) {
-      await mkdir(dir, { recursive: true });
-    }
-
-    if (tasks.length === 0) {
-      // 没有任务时，删除文件（或写空）
-      if (existsSync(filePath)) {
-        await writeFile(filePath, JSON.stringify({ tasks: [] }, null, 2), 'utf-8');
-      }
-      return;
-    }
-
-    const store: ScheduleStore = { tasks };
-    await writeFile(filePath, JSON.stringify(store, null, 2), 'utf-8');
+    await this.storage.saveSchedules(sessionId, tasks);
   }
 }

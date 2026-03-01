@@ -11,6 +11,10 @@
     "maxConcurrentMessages": 5,
     "systemPrompt": "You are Sophon, a helpful AI assistant. Be concise and helpful."
   },
+  "storage": {
+    "type": "sqlite",
+    "sqlitePath": "data/sophon.db"
+  },
   "session": {
     "storageDir": "data/sessions",
     "memoryWindow": 50

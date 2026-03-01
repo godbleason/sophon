@@ -71,6 +71,14 @@ const ChannelConfigSchema = z.object({
   }).default({}),
 });
 
+/** 存储配置 Schema */
+const StorageConfigSchema = z.object({
+  /** 存储后端类型（目前支持 sqlite，未来可扩展 postgres 等） */
+  type: z.enum(['sqlite']).default('sqlite'),
+  /** SQLite 数据库文件路径 */
+  sqlitePath: z.string().default('data/sophon.db'),
+});
+
 /** 定时任务配置 Schema */
 const SchedulerConfigSchema = z.object({
   /** 是否启用定时任务 */
@@ -143,6 +151,8 @@ export const ConfigSchema = z.object({
   providers: z.record(ProviderConfigSchema).default({}),
   /** 代理配置 */
   agent: AgentConfigSchema.default({}),
+  /** 存储配置 */
+  storage: StorageConfigSchema.default({}),
   /** 会话配置 */
   session: SessionConfigSchema.default({}),
   /** 记忆配置 */
@@ -177,4 +187,5 @@ export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 export type ChannelConfig = z.infer<typeof ChannelConfigSchema>;
 export type SchedulerConfig = z.infer<typeof SchedulerConfigSchema>;
 export type SubagentConfig = z.infer<typeof SubagentConfigSchema>;
+export type StorageConfig = z.infer<typeof StorageConfigSchema>;
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;

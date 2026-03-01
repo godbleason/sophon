@@ -5,6 +5,8 @@
 import type { Config } from '../types/config.js';
 import type { LLMProvider } from '../types/provider.js';
 import type { Channel } from '../channels/base-channel.js';
+import type { StorageProvider } from '../storage/storage-provider.js';
+import { SqliteStorageProvider } from '../storage/sqlite-provider.js';
 import { MessageBus } from './message-bus.js';
 import { SessionManager } from './session-manager.js';
 import { ToolRegistry } from './tool-registry.js';
@@ -31,10 +33,23 @@ import { ConfigError } from './errors.js';
 const log = createChildLogger('App');
 
 /**
+ * 根据配置创建 StorageProvider
+ */
+function createStorageProvider(config: Config): StorageProvider {
+  switch (config.storage.type) {
+    case 'sqlite':
+      return new SqliteStorageProvider({ dbPath: config.storage.sqlitePath });
+    default:
+      throw new ConfigError(`不支持的存储类型: ${config.storage.type as string}`);
+  }
+}
+
+/**
  * Sophon 应用实例
  */
 export class SophonApp {
   private readonly config: Config;
+  private readonly storage: StorageProvider;
   private readonly messageBus: MessageBus;
   private readonly sessionManager: SessionManager;
   private readonly toolRegistry: ToolRegistry;
@@ -57,18 +72,21 @@ export class SophonApp {
 
     log.info('初始化 Sophon...');
 
-    // 初始化核心组件
+    // 初始化存储层
+    this.storage = createStorageProvider(config);
+
+    // 初始化核心组件（注入 StorageProvider）
     this.messageBus = new MessageBus();
-    this.sessionManager = new SessionManager(config.session);
+    this.sessionManager = new SessionManager(config.session, this.storage);
     this.toolRegistry = new ToolRegistry();
-    this.memoryStore = new MemoryStore(config.memory);
+    this.memoryStore = new MemoryStore(config.memory, this.storage);
     this.skillsLoader = new SkillsLoader(config.skillsDir);
-    this.userStore = new UserStore({ storageDir: config.session.storageDir });
-    this.spaceManager = new SpaceManager({ storageDir: config.session.storageDir });
+    this.userStore = new UserStore(this.storage);
+    this.spaceManager = new SpaceManager(this.storage);
     this.mcpManager = new McpManager(config.mcpServers);
 
-    // 初始化定时任务调度器
-    this.scheduler = new Scheduler(config.scheduler, this.messageBus, this.sessionManager);
+    // 初始化定时任务调度器（使用 StorageProvider）
+    this.scheduler = new Scheduler(config.scheduler, this.messageBus, this.storage);
     setScheduler(this.scheduler);
 
     // 注册内置工具（含定时任务工具和子代理工具）
@@ -126,7 +144,11 @@ export class SophonApp {
   async start(): Promise<void> {
     log.info('启动 Sophon...');
 
-    // 初始化 Session 元数据索引（从磁盘恢复 userId/channel 映射）
+    // 初始化存储层（建表、连接等）
+    await this.storage.init();
+    log.info({ type: this.config.storage.type }, '存储层已初始化');
+
+    // 初始化 Session 元数据索引（从存储恢复 userId/channel 映射）
     await this.sessionManager.init();
 
     // 初始化用户系统
@@ -210,6 +232,10 @@ export class SophonApp {
     // 保存 Space 数据
     await this.spaceManager.save();
     log.info('Space 数据已保存');
+
+    // 关闭存储层
+    await this.storage.close();
+    log.info('存储层已关闭');
 
     log.info('Sophon 已停止');
   }

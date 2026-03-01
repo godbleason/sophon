@@ -3,8 +3,7 @@
  *
  * 管理 Space 的创建、查找、成员管理、邀请和持久化。
  *
- * 存储结构：
- *   <storageDir>/spaces.json - 所有 Space 数据
+ * 持久化委托给 StorageProvider，本模块只管内存索引与业务逻辑。
  *
  * 核心概念：
  * - 每个用户可以创建多个 Space
@@ -13,11 +12,9 @@
  * - 成员有 owner / admin / member 三种角色
  */
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
-import type { Space, SpaceMember, SpaceInvite, SpaceManagerConfig, SpaceRole } from '../types/space.js';
+import type { Space, SpaceMember, SpaceInvite, SpaceRole } from '../types/space.js';
+import type { StorageProvider } from '../storage/storage-provider.js';
 import { createChildLogger } from './logger.js';
 
 const log = createChildLogger('SpaceManager');
@@ -41,35 +38,19 @@ export class SpaceManager {
   /** 待使用的邀请码：code -> SpaceInvite */
   private readonly pendingInvites = new Map<string, SpaceInvite>();
 
-  /** 持久化文件路径 */
-  private readonly filePath: string;
-
   /** 是否有未保存的变更 */
   private dirty = false;
 
-  constructor(config: SpaceManagerConfig) {
-    this.filePath = join(config.storageDir, 'spaces.json');
-  }
+  constructor(private readonly storage: StorageProvider) {}
 
   // ─── 初始化 ───
 
   /**
-   * 初始化：从文件加载 Space 数据
+   * 初始化：从存储加载 Space 数据
    */
   async init(): Promise<void> {
-    if (!existsSync(this.filePath)) {
-      log.info('Space 数据文件不存在，初始化为空');
-      return;
-    }
-
     try {
-      const content = await readFile(this.filePath, 'utf-8');
-      const data = JSON.parse(content) as Space[];
-
-      if (!Array.isArray(data)) {
-        throw new Error('Space 数据格式无效：期望数组');
-      }
-
+      const data = await this.storage.loadSpaces();
       this.spaces = data;
       this.rebuildIndexes();
       log.info({ spaceCount: this.spaces.length }, 'Space 数据已加载');
@@ -673,19 +654,13 @@ export class SpaceManager {
   // ─── 持久化 ───
 
   /**
-   * 持久化到文件
+   * 持久化到存储
    */
   async save(): Promise<void> {
     if (!this.dirty) return;
 
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) {
-      await mkdir(dir, { recursive: true });
-    }
-
     try {
-      const content = JSON.stringify(this.spaces, null, 2);
-      await writeFile(this.filePath, content, 'utf-8');
+      await this.storage.saveSpaces(this.spaces);
       this.dirty = false;
       log.debug({ spaceCount: this.spaces.length }, 'Space 数据已保存');
     } catch (err) {

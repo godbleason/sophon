@@ -25,6 +25,8 @@ export interface ToolResult {
 
 /** 聊天消息（LLM 交互格式） */
 export interface ChatMessage {
+  /** 消息唯一 ID（持久化时自动生成，LLM 交互时可省略） */
+  id?: string;
   role: MessageRole;
   content: string | null;
   /** assistant 消息可能包含工具调用 */

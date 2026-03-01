@@ -3,20 +3,17 @@
  *
  * 管理用户的创建、查找、绑定和持久化。
  *
- * 存储结构：
- *   <storageDir>/users.json - 所有用户数据
+ * 持久化委托给 StorageProvider，本模块只管内存索引与业务逻辑。
  *
  * 核心查找逻辑：
  *   通过 (channel, channelUserId) 唯一定位一个 User。
  *   同一个 User 可以绑定多个通道身份（跨通道关联）。
  */
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
 import type { ChannelName } from '../types/message.js';
-import type { User, UserStoreConfig } from '../types/user.js';
+import type { User } from '../types/user.js';
+import type { StorageProvider } from '../storage/storage-provider.js';
 import { createChildLogger } from './logger.js';
 
 const log = createChildLogger('UserStore');
@@ -57,36 +54,20 @@ export class UserStore {
   /** 用户 ID 索引：userId -> User */
   private readonly idIndex = new Map<string, User>();
 
-  /** 持久化文件路径 */
-  private readonly filePath: string;
-
   /** 是否有未保存的变更 */
   private dirty = false;
 
   /** 待使用的链接码：code -> PendingLinkCode */
   private readonly pendingLinks = new Map<string, PendingLinkCode>();
 
-  constructor(config: UserStoreConfig) {
-    this.filePath = join(config.storageDir, 'users.json');
-  }
+  constructor(private readonly storage: StorageProvider) {}
 
   /**
-   * 初始化：从文件加载用户数据
+   * 初始化：从存储加载用户数据
    */
   async init(): Promise<void> {
-    if (!existsSync(this.filePath)) {
-      log.info('用户数据文件不存在，初始化为空');
-      return;
-    }
-
     try {
-      const content = await readFile(this.filePath, 'utf-8');
-      const data = JSON.parse(content) as User[];
-
-      if (!Array.isArray(data)) {
-        throw new Error('用户数据格式无效：期望数组');
-      }
-
+      const data = await this.storage.loadUsers();
       this.users = data;
       this.rebuildIndexes();
       log.info({ userCount: this.users.length }, '用户数据已加载');
@@ -445,19 +426,13 @@ export class UserStore {
   }
 
   /**
-   * 持久化到文件
+   * 持久化到存储
    */
   async save(): Promise<void> {
     if (!this.dirty) return;
 
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) {
-      await mkdir(dir, { recursive: true });
-    }
-
     try {
-      const content = JSON.stringify(this.users, null, 2);
-      await writeFile(this.filePath, content, 'utf-8');
+      await this.storage.saveUsers(this.users);
       this.dirty = false;
       log.debug({ userCount: this.users.length }, '用户数据已保存');
     } catch (err) {

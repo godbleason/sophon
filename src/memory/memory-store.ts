@@ -2,16 +2,14 @@
  * 记忆系统
  * 
  * 两层记忆架构:
- * - MEMORY.md: 长期事实记忆（AI 总结的用户偏好、关键信息等）
- * - HISTORY.md: 可搜索的历史日志（对话摘要时间线）
+ * - Memory: 长期事实记忆（AI 总结的用户偏好、关键信息等）
+ * - History: 可搜索的历史日志（对话摘要时间线）
  * 
- * 记忆文件使用 Markdown 格式，人类可读。
+ * 持久化委托给 StorageProvider，本模块只管记忆业务逻辑。
  */
 
-import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
 import type { MemoryConfig } from '../types/config.js';
+import type { StorageProvider } from '../storage/storage-provider.js';
 import { createChildLogger } from '../core/logger.js';
 
 const log = createChildLogger('MemoryStore');
@@ -27,14 +25,13 @@ export interface MemoryEntry {
  * 记忆存储
  */
 export class MemoryStore {
-  private readonly memoryFilePath: string;
-  private readonly historyFilePath: string;
   private readonly enabled: boolean;
 
-  constructor(config: MemoryConfig) {
+  constructor(
+    config: MemoryConfig,
+    private readonly storage: StorageProvider,
+  ) {
     this.enabled = config.enabled;
-    this.memoryFilePath = join(config.storageDir, 'MEMORY.md');
-    this.historyFilePath = join(config.storageDir, 'HISTORY.md');
   }
 
   /**
@@ -43,14 +40,10 @@ export class MemoryStore {
   async getMemory(): Promise<string> {
     if (!this.enabled) return '';
 
-    if (!existsSync(this.memoryFilePath)) {
-      return '';
-    }
-
     try {
-      return await readFile(this.memoryFilePath, 'utf-8');
+      return await this.storage.loadMemoryContent();
     } catch (err) {
-      log.error({ err }, '读取记忆文件失败');
+      log.error({ err }, '读取记忆失败');
       throw err;
     }
   }
@@ -61,10 +54,8 @@ export class MemoryStore {
   async updateMemory(content: string): Promise<void> {
     if (!this.enabled) return;
 
-    await this.ensureDir(this.memoryFilePath);
-
     const header = `# Sophon Memory\n\n> 最后更新: ${new Date().toISOString()}\n\n`;
-    await writeFile(this.memoryFilePath, header + content, 'utf-8');
+    await this.storage.saveMemoryContent(header + content);
     log.info('长期记忆已更新');
   }
 
@@ -74,14 +65,10 @@ export class MemoryStore {
   async getHistory(): Promise<string> {
     if (!this.enabled) return '';
 
-    if (!existsSync(this.historyFilePath)) {
-      return '';
-    }
-
     try {
-      return await readFile(this.historyFilePath, 'utf-8');
+      return await this.storage.loadHistoryContent();
     } catch (err) {
-      log.error({ err }, '读取历史文件失败');
+      log.error({ err }, '读取历史失败');
       throw err;
     }
   }
@@ -92,23 +79,19 @@ export class MemoryStore {
   async appendHistory(entry: MemoryEntry): Promise<void> {
     if (!this.enabled) return;
 
-    await this.ensureDir(this.historyFilePath);
-
     const dateStr = new Date(entry.timestamp).toISOString().split('T')[0];
     const timeStr = new Date(entry.timestamp).toISOString().split('T')[1]?.replace('Z', '');
     const source = entry.source ? ` [${entry.source}]` : '';
     const line = `- **${dateStr} ${timeStr}**${source}: ${entry.content}\n`;
 
-    // 如果文件不存在，先写入头部
-    if (!existsSync(this.historyFilePath)) {
-      await writeFile(
-        this.historyFilePath,
-        `# Sophon History Log\n\n`,
-        'utf-8',
-      );
+    // 如果历史为空，先写入头部
+    const existing = await this.storage.loadHistoryContent();
+    if (!existing) {
+      const header = `# Sophon History Log\n\n`;
+      await this.storage.appendHistoryContent(header);
     }
 
-    await appendFile(this.historyFilePath, line, 'utf-8');
+    await this.storage.appendHistoryContent(line);
     log.debug({ entry: entry.content.substring(0, 50) }, '历史记录已追加');
   }
 
@@ -137,13 +120,5 @@ export class MemoryStore {
     const queryLower = query.toLowerCase();
 
     return lines.filter((line) => line.toLowerCase().includes(queryLower));
-  }
-
-  /** 确保目录存在 */
-  private async ensureDir(filePath: string): Promise<void> {
-    const dir = dirname(filePath);
-    if (!existsSync(dir)) {
-      await mkdir(dir, { recursive: true });
-    }
   }
 }

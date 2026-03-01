@@ -334,6 +334,7 @@ export class AgentLoop {
       // 添加用户消息到会话
       const isScheduledTask = !!message.metadata?.['scheduledTaskId'];
       const userMessage: ChatMessage = {
+        id: randomUUID(),
         role: 'user',
         content: text,
         ...(isScheduledTask ? { metadata: { source: 'scheduler' } } : {}),
@@ -678,6 +679,7 @@ You have access to a persistent memory system. Use it proactively:
 
         // 保存 assistant 消息到会话
         const assistantMessage: ChatMessage = {
+          id: randomUUID(),
           role: 'assistant',
           content: assistantContent,
         };
@@ -697,6 +699,7 @@ You have access to a persistent memory system. Use it proactively:
 
       // 保存 assistant 消息（含工具调用）
       const assistantMessage: ChatMessage = {
+        id: randomUUID(),
         role: 'assistant',
         content: llmResponse.content,
         toolCalls: llmResponse.toolCalls,
@@ -750,6 +753,7 @@ You have access to a persistent memory system. Use it proactively:
 
         // 将工具结果添加到消息列表
         const toolMessage: ChatMessage = {
+          id: randomUUID(),
           role: 'tool',
           content: resultContent,
           toolCallId: tc.id,
