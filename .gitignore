@@ -5,3 +5,9 @@ data/
 .env
 .env.local
 .DS_Store
+
+# Backend build artifacts
+sophonai/dist/
+
+# Frontend build artifacts
+web/dist/

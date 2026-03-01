@@ -1,11 +1,13 @@
 /**
  * Web 通道
  * 
- * 提供基于网页的聊天交互界面。
- * - HTTP 服务器: 托管聊天 UI 页面
+ * 提供基于 WebSocket 的聊天 API 服务。
+ * - HTTP 服务器: 提供健康检查接口
  * - WebSocket 服务器: 实时消息通信
  * - 身份持久化: 前端通过 localStorage 持久化 clientId，
  *   后端基于 clientId 恢复 session 和对话历史
+ * 
+ * 前端作为独立工程部署，通过 WebSocket 连接本服务。
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -17,7 +19,6 @@ import type { SessionManager } from '../core/session-manager.js';
 import type { UserStore } from '../core/user-store.js';
 import type { Channel } from './base-channel.js';
 import { createChildLogger } from '../core/logger.js';
-import { getChatPageHTML } from './web-chat-ui.js';
 
 const log = createChildLogger('WebChannel');
 
@@ -91,7 +92,7 @@ export class WebChannel implements Channel {
     await new Promise<void>((resolve, reject) => {
       this.httpServer!.listen(this.port, this.host, () => {
         log.info({ port: this.port, host: this.host }, 'Web 通道已启动');
-        console.log(`\n🌐 Web 界面: http://${this.host}:${this.port}\n`);
+        console.log(`\n🌐 WebSocket API: ws://${this.host}:${this.port}\n`);
         resolve();
       });
       this.httpServer!.on('error', reject);
@@ -126,14 +127,49 @@ export class WebChannel implements Channel {
 
   /**
    * 处理 HTTP 请求
+   * 
+   * 提供健康检查和基本 API 信息接口。
+   * 前端作为独立工程部署，不再由后端提供静态文件服务。
    */
-  private handleHttpRequest(_req: IncomingMessage, res: ServerResponse): void {
-    // 返回聊天页面
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-cache',
-    });
-    res.end(getChatPageHTML());
+  private handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
+    // 添加 CORS 头，允许前端跨域访问
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    const url = req.url || '/';
+    const pathname = url.split('?')[0]!;
+
+    if (pathname === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        status: 'ok',
+        service: 'sophon-ai',
+        uptime: process.uptime(),
+        connections: this.clients.size,
+      }));
+      return;
+    }
+
+    if (pathname === '/') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        service: 'Sophon AI Backend',
+        version: '0.1.0',
+        websocket: `ws://${req.headers.host || `${this.host}:${this.port}`}`,
+        health: '/health',
+      }));
+      return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'Not Found' }));
   }
 
   /**

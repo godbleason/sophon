@@ -1,5 +1,5 @@
 # ============================================================
-# Sophon AI Assistant - Docker Image
+# Sophon AI Backend - Docker Image
 #
 # Multi-stage build:
 #   Stage 1 (builder): Install deps (compile native modules) + build TypeScript
@@ -16,11 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies (including native module compilation)
+# Install backend dependencies (including native module compilation)
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# Copy source and build
+# Copy source and build backend
 COPY tsconfig.json ./
 COPY src/ src/
 COPY config/ config/
@@ -106,7 +106,7 @@ EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/ || exit 1
+    CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Start the application
 CMD ["node", "dist/index.js"]

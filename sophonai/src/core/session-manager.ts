@@ -69,14 +69,14 @@ export class SessionManager {
 
     for (const persisted of metas) {
       this.metaIndex.set(persisted.id, {
-        id: persisted.id,
-        channel: persisted.channel,
-        userId: persisted.userId,
-        createdAt: persisted.createdAt,
-        updatedAt: persisted.updatedAt,
-        messageCount: 0, // 实际数量在完整加载时更新
-        channelData: persisted.channelData,
-      });
+            id: persisted.id,
+            channel: persisted.channel,
+            userId: persisted.userId,
+            createdAt: persisted.createdAt,
+            updatedAt: persisted.updatedAt,
+            messageCount: 0, // 实际数量在完整加载时更新
+            channelData: persisted.channelData,
+          });
     }
 
     log.info({ loadedMetas: metas.length }, 'Session 元数据索引已加载');
@@ -101,14 +101,14 @@ export class SessionManager {
     if (indexedMeta) {
       const session = await this.loadFromStorage(sessionId);
       // 从 metaIndex 恢复 userId、channel 和 channelData
-      if (indexedMeta.userId) {
-        session.meta.userId = indexedMeta.userId;
-      }
-      if (indexedMeta.channel && indexedMeta.channel !== 'unknown') {
-        session.meta.channel = indexedMeta.channel;
-      }
-      if (indexedMeta.channelData) {
-        session.meta.channelData = indexedMeta.channelData;
+        if (indexedMeta.userId) {
+          session.meta.userId = indexedMeta.userId;
+        }
+        if (indexedMeta.channel && indexedMeta.channel !== 'unknown') {
+          session.meta.channel = indexedMeta.channel;
+        }
+        if (indexedMeta.channelData) {
+          session.meta.channelData = indexedMeta.channelData;
       }
       // 传入的 channel 参数优先（它来自实际的通道连接）
       if (channel !== 'cli') {

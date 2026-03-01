@@ -19,8 +19,51 @@
 - **MCP 支持** — 作为 MCP 客户端连接外部工具服务器（兼容 Cursor / Claude Desktop 配置格式）
 - **多 LLM 支持** — OpenAI / DeepSeek / OpenRouter，统一接口可扩展
 - **持久化抽象层** — StorageProvider 接口，当前实现 SQLite（better-sqlite3），可扩展 PostgreSQL 等
+- **前后端分离** — 后端（sophonai）与前端（web）独立部署，松耦合
+- **现代前端** — React + Vite + TypeScript + Tailwind CSS + shadcn/ui
 - **结构化日志** — 基于 pino 的 JSON 格式日志，支持多级别
 - **配置灵活** — JSON 配置 + `.env` 环境变量 + CLI 参数，三层覆盖
+
+## 项目结构
+
+```
+sophon/
+├── sophonai/                     # 后端服务（独立部署）
+│   ├── config/
+│   │   └── default.json          # 默认配置
+│   ├── skills/                   # 技能定义（Markdown）
+│   ├── data/                     # 运行时数据（git ignored）
+│   │   ├── sophon.db             # SQLite 数据库
+│   │   └── sessions/             # 会话工作区
+│   ├── src/
+│   │   ├── index.ts              # 入口，CLI 参数解析
+│   │   ├── config/               # 配置加载与验证
+│   │   ├── core/                 # 核心模块（App、Agent、Session 等）
+│   │   ├── storage/              # 持久化抽象层（StorageProvider）
+│   │   ├── channels/             # 通道（CLI、Web、Telegram）
+│   │   ├── providers/            # LLM 提供商
+│   │   ├── tools/                # 内置工具集
+│   │   ├── memory/               # 记忆存储
+│   │   ├── skills/               # 技能加载器
+│   │   └── types/                # TypeScript 类型定义
+│   ├── Dockerfile                # 后端 Docker 镜像
+│   ├── docker-compose.yml        # Docker Compose 配置
+│   ├── package.json
+│   └── tsconfig.json
+├── web/                          # 前端工程（独立部署）
+│   ├── src/
+│   │   ├── App.tsx               # 主应用组件
+│   │   ├── main.tsx              # 入口
+│   │   ├── hooks/                # 自定义 Hooks（WebSocket、Chat）
+│   │   ├── components/           # UI 组件
+│   │   └── types/                # 类型定义
+│   ├── Dockerfile                # 前端 Docker 镜像（Nginx）
+│   ├── vite.config.ts
+│   ├── package.json
+│   └── tsconfig.json
+├── .gitignore
+└── README.md
+```
 
 ## 快速开始
 
@@ -33,12 +76,17 @@
 ```bash
 git clone <repo-url> sophon
 cd sophon
-npm install
+
+# 安装后端依赖
+cd sophonai && npm install
+
+# 安装前端依赖
+cd ../web && npm install
 ```
 
 ### 配置
 
-1. 创建 `.env` 文件，设置 API Key：
+1. 在 `sophonai/` 目录下创建 `.env` 文件，设置 API Key：
 
 ```bash
 # 至少配置一个 LLM 提供商
@@ -53,129 +101,104 @@ TELEGRAM_BOT_TOKEN=your-telegram-bot-token
 
 # Web 搜索增强（可选，不配置则使用 DuckDuckGo）
 SERPER_API_KEY=your-serper-key
-# 或
-SERPAPI_KEY=your-serpapi-key
 ```
 
-2. 默认配置文件位于 `config/default.json`，可按需修改，也可创建 `config/config.json` 进行覆盖。
+2. 默认配置文件位于 `sophonai/config/default.json`，可按需修改。
 
 ### 启动
 
 ```bash
+# ── 后端 ──
+cd sophonai
+
 # 开发模式
 npm run dev
 
 # 或构建后运行
 npm run build
 npm start
+
+# ── 前端 ──
+cd web
+
+# 开发模式（自动代理 WebSocket 到后端）
+npm run dev
+
+# 或构建后预览
+npm run build
+npm run preview
 ```
 
-启动后将同时提供：
-- **CLI 交互** — 终端内直接输入对话
-- **Web 界面** — 浏览器访问 `http://localhost:3000`
-- **Telegram Bot** — 如已配置 Token，自动连接
+### 独立部署
 
-### CLI 选项
+前后端分离部署时，前端通过环境变量 `VITE_WS_URL` 指定后端 WebSocket 地址：
 
 ```bash
-# 指定配置文件
-npm run dev -- -c path/to/config.json
-
-# 指定模型
-npm run dev -- -m gpt-4o
-
-# 详细日志
-npm run dev -- -v
+# 构建前端时注入后端地址
+cd web
+VITE_WS_URL=wss://api.example.com npm run build
 ```
 
-## 项目结构
+### Docker 部署
 
-```
-sophon/
-├── config/
-│   └── default.json              # 默认配置
-├── skills/                       # 技能定义（Markdown）
-├── data/                         # 运行时数据（git ignored）
-│   ├── sophon.db                 # SQLite 数据库（用户、Space、记忆、消息等）
-│   └── sessions/                 # 会话工作区（工具产生的文件）
-├── src/
-│   ├── index.ts                  # 入口，CLI 参数解析
-│   ├── config/
-│   │   └── config-manager.ts     # 配置加载与验证（Zod Schema）
-│   ├── core/
-│   │   ├── app.ts                # 应用组装与启动
-│   │   ├── agent-loop.ts         # Agent 循环（LLM ↔ 工具，并发控制）
-│   │   ├── message-bus.ts        # 消息总线（入站 / 出站 / 进度）
-│   │   ├── session-manager.ts    # 会话管理（内存缓存 + 持久化）
-│   │   ├── user-store.ts         # 多用户身份管理与跨通道关联
-│   │   ├── space-manager.ts      # Space 协作空间管理
-│   │   ├── scheduler.ts          # 定时任务调度器
-│   │   ├── subagent-manager.ts   # 子代理管理器
-│   │   ├── mcp-manager.ts        # MCP 客户端管理器
-│   │   ├── tool-registry.ts      # 工具注册表
-│   │   ├── semaphore.ts          # 并发信号量
-│   │   ├── async-queue.ts        # 异步队列
-│   │   ├── errors.ts             # 错误类型
-│   │   └── logger.ts             # 日志系统（pino）
-│   ├── storage/
-│   │   ├── storage-provider.ts   # 持久化抽象接口（StorageProvider）
-│   │   ├── sqlite-provider.ts    # SQLite 实现（better-sqlite3）
-│   │   └── index.ts              # 统一导出
-│   ├── channels/
-│   │   ├── base-channel.ts       # 通道接口
-│   │   ├── cli-channel.ts        # CLI 通道
-│   │   ├── web-channel.ts        # Web 通道（HTTP + WebSocket）
-│   │   ├── web-chat-ui.ts        # Web 聊天 UI
-│   │   └── telegram-channel.ts   # Telegram 通道
-│   ├── providers/
-│   │   ├── openai-compatible-base.ts  # OpenAI 兼容基类
-│   │   ├── openai-provider.ts
-│   │   ├── deepseek-provider.ts
-│   │   ├── openrouter-provider.ts
-│   │   └── provider-factory.ts
-│   ├── tools/                    # 内置工具集
-│   ├── memory/
-│   │   └── memory-store.ts       # 记忆存储
-│   ├── skills/
-│   │   └── skills-loader.ts      # 技能加载器
-│   └── types/                    # TypeScript 类型定义
-└── package.json
+```bash
+# 后端
+cd sophonai
+docker build -t sophonai .
+docker run -d -p 3000:3000 --env-file .env sophonai
+
+# 前端
+cd web
+docker build -t sophon-web --build-arg VITE_WS_URL=wss://api.example.com .
+docker run -d -p 80:80 sophon-web
 ```
 
 ## 架构概览
 
 ```
-┌──────────────┐ ┌──────────────┐ ┌──────────────────┐
-│  CLI Channel │ │  Web Channel │ │ Telegram Channel │  ...
-└──────┬───────┘ └──────┬───────┘ └────────┬─────────┘
-       │                │                  │
-       ▼                ▼                  ▼
-┌──────────────────────────────────────────────────────┐
-│                    Message Bus                       │
-└──────────────────────────┬───────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────┐
-│                     Agent Loop                       │
-│  ┌─────────────┐  ┌───────────────┐  ┌───────────┐  │
-│  │ LLM Provider│  │ Tool Registry │  │ MCP Tools │  │
-│  └─────────────┘  └───────────────┘  └───────────┘  │
-└──────────┬───────────────┬───────────────┬───────────┘
-           │               │               │
-    ┌──────┴──────┐  ┌─────┴─────┐  ┌──────┴──────┐
-    │   Session   │  │  Memory   │  │  Subagent   │
-    │   Manager   │  │   Store   │  │  Manager    │
-    └──────┬──────┘  └─────┬─────┘  └─────────────┘
-           │               │
-    ┌──────┴──────┐  ┌─────┴─────┐
-    │  User Store │  │ Scheduler │
-    │ Space Mgr   │  │           │
-    └──────┬──────┘  └─────┬─────┘
-           │               │
-           ▼               ▼
-┌──────────────────────────────────────────────────────┐
-│              StorageProvider (SQLite)                 │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      Frontend (web/)                         │
+│   React + Vite + TypeScript + Tailwind CSS + shadcn/ui       │
+│                                                              │
+│   WebSocket ◄──────────────────────────────────────┐         │
+└──────────────────────────────────────────────────────┼────────┘
+                                                       │
+                                                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│                     Backend (sophonai/)                       │
+│                                                              │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐      │
+│  │  CLI Channel │ │  Web Channel │ │ Telegram Channel │ ...  │
+│  └──────┬───────┘ └──────┬───────┘ └────────┬─────────┘      │
+│         │                │                  │                │
+│         ▼                ▼                  ▼                │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │                    Message Bus                       │    │
+│  └──────────────────────────┬───────────────────────────┘    │
+│                             │                                │
+│                             ▼                                │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │                     Agent Loop                       │    │
+│  │  ┌─────────────┐  ┌───────────────┐  ┌───────────┐  │    │
+│  │  │ LLM Provider│  │ Tool Registry │  │ MCP Tools │  │    │
+│  │  └─────────────┘  └───────────────┘  └───────────┘  │    │
+│  └──────────┬───────────────┬───────────────┬───────────┘    │
+│             │               │               │                │
+│      ┌──────┴──────┐  ┌─────┴─────┐  ┌──────┴──────┐        │
+│      │   Session   │  │  Memory   │  │  Subagent   │        │
+│      │   Manager   │  │   Store   │  │  Manager    │        │
+│      └──────┬──────┘  └─────┬─────┘  └─────────────┘        │
+│             │               │                                │
+│      ┌──────┴──────┐  ┌─────┴─────┐                          │
+│      │  User Store │  │ Scheduler │                          │
+│      │ Space Mgr   │  │           │                          │
+│      └──────┬──────┘  └─────┬─────┘                          │
+│             │               │                                │
+│             ▼               ▼                                │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │              StorageProvider (SQLite)                 │    │
+│  └──────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ## 内置工具
@@ -230,7 +253,7 @@ sophon/
 
 ## 配置说明
 
-`config/default.json` 完整配置项：
+`sophonai/config/default.json` 完整配置项：
 
 ```jsonc
 {
@@ -247,8 +270,7 @@ sophon/
     "temperature": 0.7,
     "maxTokens": 4096,
     "maxIterations": 50,             // 单次对话最大工具调用轮次
-    "maxConcurrentMessages": 5,      // 全局最大并发消息数
-    "systemPrompt": "..."
+    "maxConcurrentMessages": 5       // 全局最大并发消息数
   },
 
   // 存储配置
@@ -257,48 +279,18 @@ sophon/
     "sqlitePath": "data/sophon.db"   // SQLite 数据库文件路径
   },
 
-  // 会话配置
-  "session": {
-    "storageDir": "data/sessions",   // 工作区文件目录
-    "memoryWindow": 50               // 历史窗口大小（超出自动压缩摘要）
-  },
-
-  // 记忆配置
-  "memory": {
-    "enabled": true
-  },
-
   // 通道配置
   "channels": {
-    "cli": { "enabled": true, "prompt": "you> " },
+    "cli": { "enabled": false },
     "web": { "enabled": true, "port": 3000, "host": "localhost" },
     "telegram": { "enabled": false, "token": "", "allowedUsers": [] }
   },
 
   // 定时任务
-  "scheduler": {
-    "enabled": true,
-    "maxTasksPerSession": 20
-  },
-
-  // 子代理
-  "subagent": {
-    "enabled": true,
-    "maxIterations": 15,
-    "maxConcurrent": 5,
-    "timeout": 300000,
-    "toolBlacklist": ["spawn", "subagent_status", "cancel_subagent"]
-  },
+  "scheduler": { "enabled": true },
 
   // MCP 服务器（兼容 Cursor / Claude Desktop 格式）
-  "mcpServers": {
-    "example-server": {
-      "enabled": true,
-      "command": "npx",
-      "args": ["-y", "@example/mcp-server"],
-      "env": {}
-    }
-  },
+  "mcpServers": {},
 
   "logLevel": "info"
 }
@@ -318,6 +310,8 @@ sophon/
 | `SOPHON_MODEL` | 覆盖默认模型 |
 | `SOPHON_TEMPERATURE` | 覆盖温度参数 |
 | `SOPHON_LOG_LEVEL` | 覆盖日志级别 |
+| `PORT` | Web 通道端口（云平台自动设置） |
+| `VITE_WS_URL` | 前端构建时注入的后端 WebSocket 地址 |
 
 ## 持久化架构
 
@@ -342,25 +336,26 @@ sophon/
 ## 开发
 
 ```bash
-# 类型检查
-npm run lint
+# ── 后端开发 ──
+cd sophonai
 
-# 运行测试
-npm test
+npm run dev        # 开发模式（tsx 热重载）
+npm run lint       # 类型检查
+npm run build      # 构建
+npm start          # 运行构建产物
 
-# 监听模式测试
-npm run test:watch
+# ── 前端开发 ──
+cd web
 
-# 构建
-npm run build
-
-# 查看当前配置
-npx tsx src/index.ts config
+npm run dev        # Vite 开发服务器（代理 WS 到后端）
+npm run build      # 构建生产版本
+npm run preview    # 预览构建结果
+npm run lint       # ESLint 检查
 ```
 
 ## 技能系统
 
-在 `skills/` 目录下创建 Markdown 文件即可添加技能。技能会被自动注入到系统提示中。
+在 `sophonai/skills/` 目录下创建 Markdown 文件即可添加技能。技能会被自动注入到系统提示中。
 
 ```markdown
 ---

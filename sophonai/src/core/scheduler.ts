@@ -262,8 +262,8 @@ export class Scheduler {
 
     for (const [_sessionId, tasks] of allSchedules) {
       for (const task of tasks) {
-        this.tasks.set(task.id, task);
-        totalLoaded++;
+          this.tasks.set(task.id, task);
+          totalLoaded++;
       }
     }
 

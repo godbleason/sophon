@@ -1,9 +1,9 @@
 version: "3.8"
 
 services:
-  sophon:
+  sophonai:
     build: .
-    container_name: sophon
+    container_name: sophonai
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
