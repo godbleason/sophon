@@ -12,8 +12,6 @@ services:
       - ./data:/app/data
       # Optionally mount custom config
       # - ./config:/app/config
-      # Optionally mount MCP config (compatible with Cursor / Claude Desktop format)
-      # - ./mcp.json:/app/mcp.json
       # Optionally mount custom skills
       # - ./skills:/app/skills
     environment:
