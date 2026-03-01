@@ -2,6 +2,8 @@
 
 轻量级多用户 AI 助手框架。支持多通道交互、多用户身份管理、Space 协作、工具调用、定时任务、子代理、长期记忆和 MCP 协议。
 
+🌐 **官网**：[https://www.sophonai.online/](https://www.sophonai.online/)
+
 ## 特性
 
 - **多通道接入** — CLI / Web（WebSocket）/ Telegram，可扩展更多通道
