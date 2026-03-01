@@ -295,6 +295,8 @@ export class SessionManager {
    * 如果存在对话摘要，会在返回的消息列表开头注入一条 system 消息，
    * 告知 LLM 之前的对话概要。这确保 LLM 在有限的上下文窗口内
    * 仍能理解早期对话中建立的关键信息。
+   *
+   * 重要：截取时保证不在工具调用链中间截断，避免产生孤立的 tool 消息。
    */
   getHistory(sessionId: string): ChatMessage[] {
     const session = this.sessions.get(sessionId);
@@ -318,13 +320,57 @@ export class SessionManager {
       ? memoryWindow - 1
       : memoryWindow;
 
+    let messages: ChatMessage[];
     if (session.messages.length <= availableSlots) {
-      result.push(...session.messages);
+      messages = [...session.messages];
     } else {
-      result.push(...session.messages.slice(-availableSlots));
+      messages = session.messages.slice(-availableSlots);
     }
 
+    // 清理开头的孤立消息：移除没有对应 assistant(toolCalls) 的 tool 消息，
+    // 以及开头的 assistant(toolCalls) 消息（其 tool 结果可能已被截断）
+    messages = this.sanitizeMessageStart(messages);
+
+    result.push(...messages);
     return result;
+  }
+
+  /**
+   * 清理消息列表开头的孤立消息
+   *
+   * 确保发送给 LLM 的消息不会以孤立的 tool 消息或
+   * 不完整的 assistant(toolCalls) 消息开头。
+   *
+   * 孤立消息场景：
+   * - 截取窗口恰好从 tool 消息开始（缺少前面的 assistant）
+   * - 截取窗口从 assistant(toolCalls) 开始，但后续的 tool 结果被截断
+   */
+  private sanitizeMessageStart(messages: ChatMessage[]): ChatMessage[] {
+    let startIdx = 0;
+
+    // 跳过开头的孤立 tool 消息
+    while (startIdx < messages.length && messages[startIdx]!.role === 'tool') {
+      startIdx++;
+    }
+
+    // 如果开头是 assistant(toolCalls)，检查其 tool 结果是否完整
+    if (startIdx < messages.length) {
+      const first = messages[startIdx]!;
+      if (first.role === 'assistant' && first.toolCalls?.length) {
+        // 检查紧随其后的 tool 消息数量是否与 toolCalls 数量匹配
+        const expectedToolCount = first.toolCalls.length;
+        let actualToolCount = 0;
+        for (let i = startIdx + 1; i < messages.length && messages[i]!.role === 'tool'; i++) {
+          actualToolCount++;
+        }
+        if (actualToolCount < expectedToolCount) {
+          // tool 结果不完整，跳过整个工具调用链
+          startIdx += 1 + actualToolCount;
+        }
+      }
+    }
+
+    return startIdx > 0 ? messages.slice(startIdx) : messages;
   }
 
   /**
@@ -662,6 +708,8 @@ export class SessionManager {
       let messages: ChatMessage[];
       if (summary && summary.compressedCount > 0 && summary.compressedCount <= allMessages.length) {
         messages = allMessages.slice(summary.compressedCount);
+        // 安全清理：确保恢复后的消息不以孤立的 tool 消息开头
+        messages = this.sanitizeMessageStart(messages);
         log.info(
           { sessionId, total: allMessages.length, compressed: summary.compressedCount, remaining: messages.length },
           '已加载摘要，跳过已压缩的消息',
