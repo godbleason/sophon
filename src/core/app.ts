@@ -23,6 +23,7 @@ import { MemoryStore } from '../memory/memory-store.js';
 import { SkillsLoader } from '../skills/skills-loader.js';
 import { UserStore } from './user-store.js';
 import { SpaceManager } from './space-manager.js';
+import { McpManager } from './mcp-manager.js';
 import { setLogLevel, createChildLogger } from './logger.js';
 import { ConfigError } from './errors.js';
 
@@ -43,6 +44,7 @@ export class SophonApp {
   private readonly subagentManager: SubagentManager;
   private readonly userStore: UserStore;
   private readonly spaceManager: SpaceManager;
+  private readonly mcpManager: McpManager;
   private readonly agentLoop: AgentLoop;
   private readonly channels: Channel[] = [];
 
@@ -62,6 +64,7 @@ export class SophonApp {
     this.skillsLoader = new SkillsLoader(config.skillsDir);
     this.userStore = new UserStore({ storageDir: config.session.storageDir });
     this.spaceManager = new SpaceManager({ storageDir: config.session.storageDir });
+    this.mcpManager = new McpManager(config.mcp);
 
     // 初始化定时任务调度器
     this.scheduler = new Scheduler(config.scheduler, this.messageBus, this.sessionManager);
@@ -104,6 +107,7 @@ export class SophonApp {
       skillsLoader: this.skillsLoader,
       userStore: this.userStore,
       spaceManager: this.spaceManager,
+      mcpManager: this.mcpManager,
     });
 
     // 初始化通道
@@ -135,6 +139,18 @@ export class SophonApp {
       log.info({ skillCount: skills.length }, '技能加载完成');
     } catch (err) {
       log.warn({ err }, '技能加载失败，继续启动');
+    }
+
+    // 初始化 MCP 连接并注册 MCP 工具
+    try {
+      await this.mcpManager.init();
+      const mcpTools = this.mcpManager.getAllTools();
+      if (mcpTools.length > 0) {
+        this.toolRegistry.registerAll(mcpTools);
+        log.info({ mcpToolCount: mcpTools.length }, 'MCP 工具已注册');
+      }
+    } catch (err) {
+      log.warn({ err }, 'MCP 初始化失败，继续启动');
     }
 
     // 启动定时任务调度器
@@ -171,6 +187,9 @@ export class SophonApp {
 
     // 停止所有子代理
     await this.subagentManager.stopAll();
+
+    // 断开 MCP 连接
+    await this.mcpManager.shutdown();
 
     // 停止定时任务调度器
     await this.scheduler.stop();

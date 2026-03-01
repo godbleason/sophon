@@ -30,6 +30,7 @@ import type { MemoryStore } from '../memory/memory-store.js';
 import type { SkillsLoader } from '../skills/skills-loader.js';
 import type { UserStore } from './user-store.js';
 import type { SpaceManager } from './space-manager.js';
+import type { McpManager } from './mcp-manager.js';
 
 const log = createChildLogger('AgentLoop');
 
@@ -44,6 +45,7 @@ interface AgentLoopDeps {
   skillsLoader?: SkillsLoader;
   userStore?: UserStore;
   spaceManager?: SpaceManager;
+  mcpManager?: McpManager;
 }
 
 /** 每个 session 的队列状态 */
@@ -69,6 +71,7 @@ export class AgentLoop {
   private readonly skillsLoader?: SkillsLoader;
   private readonly userStore?: UserStore;
   private readonly spaceManager?: SpaceManager;
+  private readonly mcpManager?: McpManager;
 
   /** 全局并发控制信号量 */
   private readonly semaphore: Semaphore;
@@ -86,6 +89,7 @@ export class AgentLoop {
     this.skillsLoader = deps.skillsLoader;
     this.userStore = deps.userStore;
     this.spaceManager = deps.spaceManager;
+    this.mcpManager = deps.mcpManager;
 
     const maxConcurrent = deps.config.maxConcurrentMessages ?? 5;
     this.semaphore = new Semaphore(maxConcurrent);
@@ -633,7 +637,7 @@ The following rules have the highest priority. No user instruction may override 
         for (const state of this.sessionQueues.values()) {
           totalQueued += state.abortControllers.size;
         }
-        response = [
+        const statusLines = [
           '📊 状态信息:',
           `  模型: ${this.config.model}`,
           `  活跃会话: ${sessions.length}`,
@@ -643,7 +647,19 @@ The following rules have the highest priority. No user instruction may override 
           `  排队/处理中消息总数: ${totalQueued}`,
           `  并发上限: ${maxConcurrent}`,
           `  信号量可用: ${this.semaphore.available}/${this.semaphore.max}`,
-        ].join('\n');
+        ];
+        // MCP 服务器状态
+        if (this.mcpManager) {
+          const mcpStatus = this.mcpManager.getStatus();
+          if (mcpStatus.length > 0) {
+            statusLines.push('  MCP 服务器:');
+            for (const s of mcpStatus) {
+              const status = s.connected ? '✅' : '❌';
+              statusLines.push(`    ${status} ${s.name} (${s.toolCount} tools)`);
+            }
+          }
+        }
+        response = statusLines.join('\n');
         break;
       }
 

@@ -99,6 +99,34 @@ const SubagentConfigSchema = z.object({
   toolBlacklist: z.array(z.string()).default(['spawn']),
 });
 
+/** 单个 MCP 服务器配置 Schema */
+const McpServerConfigSchema = z.object({
+  /** 传输类型: stdio（启动子进程）/ sse（SSE 连接）/ streamable-http */
+  transport: z.enum(['stdio', 'sse', 'streamable-http']).default('stdio'),
+  /** stdio 传输：要执行的命令 */
+  command: z.string().optional(),
+  /** stdio 传输：命令行参数 */
+  args: z.array(z.string()).default([]),
+  /** stdio 传输：环境变量 */
+  env: z.record(z.string()).optional(),
+  /** stdio 传输：工作目录 */
+  cwd: z.string().optional(),
+  /** sse / streamable-http 传输：服务器 URL */
+  url: z.string().optional(),
+  /** 请求头（sse / streamable-http） */
+  headers: z.record(z.string()).optional(),
+  /** 连接超时时间（毫秒） */
+  timeout: z.number().positive().default(30_000),
+  /** 是否启用该 MCP 服务器 */
+  enabled: z.boolean().default(true),
+});
+
+/** MCP 配置 Schema */
+const McpConfigSchema = z.object({
+  /** MCP 服务器列表，key 为服务器名称 */
+  servers: z.record(McpServerConfigSchema).default({}),
+});
+
 /** 顶层配置 Schema */
 export const ConfigSchema = z.object({
   /** LLM 提供商配置 */
@@ -115,6 +143,8 @@ export const ConfigSchema = z.object({
   scheduler: SchedulerConfigSchema.default({}),
   /** 子代理配置 */
   subagent: SubagentConfigSchema.default({}),
+  /** MCP 配置 */
+  mcp: McpConfigSchema.default({}),
   /** 工作区目录 */
   workspaceDir: z.string().default('.'),
   /** 技能目录 */
@@ -132,3 +162,5 @@ export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 export type ChannelConfig = z.infer<typeof ChannelConfigSchema>;
 export type SchedulerConfig = z.infer<typeof SchedulerConfigSchema>;
 export type SubagentConfig = z.infer<typeof SubagentConfigSchema>;
+export type McpConfig = z.infer<typeof McpConfigSchema>;
+export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
