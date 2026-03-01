@@ -2,7 +2,7 @@
 # Sophon AI Assistant - Docker Image
 #
 # Multi-stage build:
-#   Stage 1 (builder): Install deps + compile TypeScript
+#   Stage 1 (builder): Install deps (compile native modules) + build TypeScript
 #   Stage 2 (runtime): Minimal image with Node.js + Python + common tools
 # ============================================================
 
@@ -11,9 +11,14 @@ FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Install dependencies first (layer cache friendly)
+# Install build tools for native modules (better-sqlite3 requires python3, make, g++)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install dependencies (including native module compilation)
 COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts
+RUN npm ci
 
 # Copy source and build
 COPY tsconfig.json ./
@@ -22,6 +27,9 @@ COPY config/ config/
 COPY skills/ skills/
 
 RUN npm run build
+
+# Prune dev dependencies after build (keep only production deps)
+RUN npm prune --omit=dev
 
 # ── Stage 2: Runtime ────────────────────────────────────────
 FROM node:20-slim AS runtime
@@ -75,14 +83,14 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 
 WORKDIR /app
 
-# Copy production dependencies
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts
+# Copy node_modules from builder (includes compiled native modules like better-sqlite3)
+COPY --from=builder /app/node_modules/ node_modules/
 
 # Copy built artifacts from builder
 COPY --from=builder /app/dist/ dist/
 
 # Copy config and skills
+COPY package.json ./
 COPY config/ config/
 COPY skills/ skills/
 
