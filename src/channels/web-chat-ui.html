@@ -87,7 +87,6 @@
       display: flex;
       flex-direction: column;
       gap: 16px;
-      scroll-behavior: smooth;
     }
 
     .messages::-webkit-scrollbar {
@@ -460,6 +459,16 @@
       border-color: var(--accent);
     }
 
+    /* 展开状态下 hover 整个组时，header 和 steps 边框同时高亮 */
+    .progress-group.expanded:hover .progress-header {
+      color: var(--text-secondary);
+      border-color: var(--accent);
+    }
+
+    .progress-group.expanded:hover .progress-steps {
+      border-color: var(--accent);
+    }
+
     .progress-header .chevron {
       display: inline-block;
       transition: transform 0.2s;
@@ -518,10 +527,11 @@
       display: none;
     }
 
-    /* 展开状态：步骤显示并衔接头部圆角 */
+    /* 展开状态：步骤显示并衔接头部圆角，去掉顶部边框与 header 无缝衔接 */
     .progress-group.expanded .progress-steps {
       border-top-left-radius: 0;
       border-top-right-radius: 0;
+      border-top: none;
     }
 
     .progress-step {
@@ -677,6 +687,7 @@
 
     let ws = null;
     let isWaiting = false;
+    let isLoadingHistory = false; // 批量加载历史消息时禁止逐条滚动
     let currentProgressEl = null; // 当前进度步骤容器
 
     // === 持久化客户端身份 ===
@@ -744,6 +755,8 @@
           // 如果服务端返回了历史消息，恢复显示
           if (data.history && data.history.length > 0) {
             if (welcomeEl) welcomeEl.style.display = 'none';
+            // 批量加载历史消息时禁用逐条滚动
+            isLoadingHistory = true;
             for (const msg of data.history) {
               // assistant 消息可能附带思维链步骤
               if (msg.role === 'assistant' && msg.thinkingSteps && msg.thinkingSteps.length > 0) {
@@ -751,6 +764,9 @@
               }
               addMessage(msg.role, msg.content);
             }
+            isLoadingHistory = false;
+            // 历史消息加载完毕后，一次性即时滚到底部
+            scrollToBottom(true);
           } else if (welcomeEl) {
             // 没有历史消息时恢复欢迎界面
             welcomeEl.style.display = '';
@@ -895,8 +911,16 @@
 
     /**
      * 从历史数据中创建一个已折叠的思维链组（刷新页面后恢复用）
+     * 仅当存在工具调用时才渲染，纯 thinking 步骤不显示
      */
     function addCollapsedProgressGroup(thinkingSteps) {
+      // 统计工具调用
+      const toolCalls = thinkingSteps.filter(s => s.type === 'tool_call');
+      const toolCount = toolCalls.length;
+
+      // 没有工具调用（只有 thinking 步骤），不渲染进度组
+      if (toolCount === 0) return;
+
       const groupEl = document.createElement('div');
       groupEl.className = 'progress-group collapsed';
 
@@ -904,17 +928,9 @@
       const headerEl = document.createElement('div');
       headerEl.className = 'progress-header';
 
-      // 统计工具调用
-      const toolCalls = thinkingSteps.filter(s => s.type === 'tool_call');
-      const toolCount = toolCalls.length;
-      let summaryText = '🧠 思考过程';
-      if (toolCount > 0) {
-        const uniqueNames = [...new Set(toolCalls.map(s => s.toolName).filter(Boolean))];
-        summaryText += ' · ' + toolCount + ' 次工具调用'
-          + (uniqueNames.length > 0 ? ' (' + uniqueNames.join(', ') + ')' : '');
-      } else {
-        summaryText += ' · ' + thinkingSteps.length + ' 步';
-      }
+      const uniqueNames = [...new Set(toolCalls.map(s => s.toolName).filter(Boolean))];
+      const summaryText = '🧠 思考过程 · ' + toolCount + ' 次工具调用'
+        + (uniqueNames.length > 0 ? ' (' + uniqueNames.join(', ') + ')' : '');
 
       headerEl.innerHTML = '<span class="chevron">▶</span><span class="progress-summary">'
         + escapeHtml(summaryText) + '</span>';
@@ -964,26 +980,29 @@
           if (icon && icon.textContent === '⏳') icon.textContent = '✅';
         });
 
-        // 统计工具调用数量用于摘要
-        const toolSteps = currentProgressEl.querySelectorAll('.progress-step [data-tool-call-id]').length
-          || currentProgressEl.querySelectorAll('.progress-step').length;
+        // 统计工具调用数量
+        const toolCalls = currentProgressEl.querySelectorAll('[data-tool-call-id]');
+        const toolCount = toolCalls.length;
+
+        if (toolCount === 0) {
+          // 没有任何工具调用（只有 thinking 步骤），进度组无实质内容，直接移除
+          currentProgressEl.remove();
+          currentProgressEl = null;
+          progressStepCount = 0;
+          return;
+        }
+
+        // 有工具调用时，更新摘要并折叠
         const summaryEl = currentProgressEl.querySelector('.progress-summary');
         if (summaryEl) {
-          const toolCalls = currentProgressEl.querySelectorAll('[data-tool-call-id]');
-          const toolCount = toolCalls.length;
-          if (toolCount > 0) {
-            // 收集工具名称
-            const toolNames = [];
-            toolCalls.forEach(el => {
-              const nameEl = el.querySelector('.tool-name');
-              if (nameEl) toolNames.push(nameEl.textContent);
-            });
-            const uniqueNames = [...new Set(toolNames)];
-            summaryEl.textContent = '🧠 思考过程 · ' + toolCount + ' 次工具调用'
-              + (uniqueNames.length > 0 ? ' (' + uniqueNames.join(', ') + ')' : '');
-          } else {
-            summaryEl.textContent = '🧠 思考过程 · ' + progressStepCount + ' 步';
-          }
+          const toolNames = [];
+          toolCalls.forEach(el => {
+            const nameEl = el.querySelector('.tool-name');
+            if (nameEl) toolNames.push(nameEl.textContent);
+          });
+          const uniqueNames = [...new Set(toolNames)];
+          summaryEl.textContent = '🧠 思考过程 · ' + toolCount + ' 次工具调用'
+            + (uniqueNames.length > 0 ? ' (' + uniqueNames.join(', ') + ')' : '');
         }
 
         // 自动折叠
@@ -1064,7 +1083,9 @@
 
       // 插入到 typing indicator 之前
       messagesEl.insertBefore(msgEl, typingIndicator);
-      scrollToBottom();
+      if (!isLoadingHistory) {
+        scrollToBottom();
+      }
     }
 
     function formatMessage(text) {
@@ -1088,9 +1109,13 @@
       typingIndicator.classList.remove('visible');
     }
 
-    function scrollToBottom() {
+    function scrollToBottom(instant) {
       requestAnimationFrame(() => {
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        if (instant) {
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        } else {
+          messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: 'smooth' });
+        }
       });
     }
 
