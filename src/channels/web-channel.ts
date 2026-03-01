@@ -215,9 +215,17 @@ export class WebChannel implements Channel {
       clearTimeout(identifyTimeout);
       this.clients.delete(connId);
       if (client.identified && client.sessionId) {
-      // 取消该会话正在执行的代理循环，避免资源浪费
-        this.messageBus.cancelSession(client.sessionId);
-        log.info({ clientId: client.clientId, sessionId: client.sessionId }, '客户端已断开，会话已取消');
+        // 检查同一 session 是否还有其他活跃连接（被新标签页接管）
+        const hasOtherConn = Array.from(this.clients.values()).some(
+          (c) => c.sessionId === client.sessionId,
+        );
+        if (!hasOtherConn) {
+          // 没有其他连接了，取消该会话正在执行的代理循环
+          this.messageBus.cancelSession(client.sessionId);
+          log.info({ clientId: client.clientId, sessionId: client.sessionId }, '客户端已断开，会话已取消');
+        } else {
+          log.info({ clientId: client.clientId, sessionId: client.sessionId }, '旧连接已关闭，会话由新连接接管');
+        }
       }
     });
 

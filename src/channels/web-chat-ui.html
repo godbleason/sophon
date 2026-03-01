@@ -705,10 +705,18 @@
         handleServerMessage(data);
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         statusDot.classList.remove('connected');
-        statusText.textContent = '已断开';
         sendBtn.disabled = true;
+
+        if (event.code === 4003) {
+          // 同一客户端在另一个标签页打开了新连接，不自动重连
+          statusText.textContent = '已在其他标签页打开';
+          addMessage('system', '⚠️ 该会话已在另一个标签页中打开，当前标签页已断开。关闭其他标签页后刷新此页面即可恢复。');
+          return;
+        }
+
+        statusText.textContent = '已断开';
         setTimeout(connect, 3000);
       };
 
