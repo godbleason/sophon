@@ -10,7 +10,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { McpConfig, McpServerConfig } from '../types/config.js';
+import type { McpServerConfig } from '../types/config.js';
 import type { Tool, ToolParametersSchema, ToolContext } from '../types/tool.js';
 import { createChildLogger } from './logger.js';
 
@@ -136,20 +136,21 @@ class McpToolAdapter implements Tool {
  * MCP 客户端管理器
  *
  * 负责连接到所有配置的 MCP 服务器并管理其生命周期。
+ * 配置格式兼容 Cursor / Claude Desktop 的 mcpServers 格式。
  */
 export class McpManager {
-  private readonly config: McpConfig;
+  private readonly servers: Record<string, McpServerConfig>;
   private readonly connections = new Map<string, McpServerConnection>();
 
-  constructor(config: McpConfig) {
-    this.config = config;
+  constructor(servers: Record<string, McpServerConfig>) {
+    this.servers = servers;
   }
 
   /**
    * 初始化：连接到所有已启用的 MCP 服务器
    */
   async init(): Promise<void> {
-    const serverEntries = Object.entries(this.config.servers);
+    const serverEntries = Object.entries(this.servers);
     if (serverEntries.length === 0) {
       log.debug('No MCP servers configured');
       return;
@@ -195,8 +196,9 @@ export class McpManager {
       return;
     }
 
+    const transportType = this.inferTransport(name, serverConfig);
     log.info(
-      { server: name, transport: serverConfig.transport },
+      { server: name, transport: transportType },
       'Connecting to MCP server...',
     );
 
@@ -278,13 +280,48 @@ export class McpManager {
   }
 
   /**
-   * 根据配置创建传输层
+   * 推断传输类型
+   * 
+   * 优先级：
+   * 1. 显式指定的 transport 字段
+   * 2. 有 command 字段 → stdio
+   * 3. 有 url 字段 → sse（兼容 Cursor 格式，大部分远端 MCP 服务使用 SSE）
+   * 4. 默认 stdio
+   * 
+   * 这样 Cursor / Claude Desktop 的配置可以直接使用，无需添加 transport 字段。
+   */
+  private inferTransport(
+    name: string,
+    serverConfig: McpServerConfig,
+  ): 'stdio' | 'sse' | 'streamable-http' {
+    // 显式指定时直接使用
+    if (serverConfig.transport) {
+      return serverConfig.transport;
+    }
+    // 有 command → stdio（Cursor/Claude Desktop 的 stdio 格式）
+    if (serverConfig.command) {
+      return 'stdio';
+    }
+    // 有 url → sse（Cursor 的 url 格式）
+    if (serverConfig.url) {
+      return 'sse';
+    }
+    // 没有任何线索，报错
+    throw new Error(
+      `MCP server "${name}": must specify either "command" (for stdio) or "url" (for sse/http)`,
+    );
+  }
+
+  /**
+   * 根据配置创建传输层（自动推断传输类型）
    */
   private createTransport(
     name: string,
     serverConfig: McpServerConfig,
   ): Transport {
-    switch (serverConfig.transport) {
+    const transportType = this.inferTransport(name, serverConfig);
+
+    switch (transportType) {
       case 'stdio': {
         if (!serverConfig.command) {
           throw new Error(
@@ -344,7 +381,7 @@ export class McpManager {
 
       default:
         throw new Error(
-          `MCP server "${name}": unknown transport type "${serverConfig.transport}"`,
+          `MCP server "${name}": unknown transport type "${transportType}"`,
         );
     }
   }

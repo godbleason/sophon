@@ -48,8 +48,6 @@
     "maxTokens": 4096,
     "toolBlacklist": ["spawn", "subagent_status", "cancel_subagent"]
   },
-  "mcp": {
-    "servers": {}
-  },
+  "mcpServers": {},
   "logLevel": "info"
 }

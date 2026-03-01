@@ -99,32 +99,42 @@ const SubagentConfigSchema = z.object({
   toolBlacklist: z.array(z.string()).default(['spawn']),
 });
 
-/** 单个 MCP 服务器配置 Schema */
+/**
+ * 单个 MCP 服务器配置 Schema
+ * 
+ * 兼容 Cursor / Claude Desktop 配置格式：
+ * - 有 command 字段 → stdio 传输（启动子进程）
+ * - 有 url 字段 → SSE / Streamable HTTP 传输
+ * 
+ * Cursor 配置可直接复制使用，例如：
+ * {
+ *   "mcpServers": {
+ *     "filesystem": {
+ *       "command": "npx",
+ *       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"]
+ *     }
+ *   }
+ * }
+ */
 const McpServerConfigSchema = z.object({
-  /** 传输类型: stdio（启动子进程）/ sse（SSE 连接）/ streamable-http */
-  transport: z.enum(['stdio', 'sse', 'streamable-http']).default('stdio'),
-  /** stdio 传输：要执行的命令 */
+  /** stdio 传输：要执行的命令 (有此字段则自动识别为 stdio 传输) */
   command: z.string().optional(),
   /** stdio 传输：命令行参数 */
   args: z.array(z.string()).default([]),
-  /** stdio 传输：环境变量 */
+  /** 环境变量 */
   env: z.record(z.string()).optional(),
   /** stdio 传输：工作目录 */
   cwd: z.string().optional(),
-  /** sse / streamable-http 传输：服务器 URL */
+  /** HTTP 传输：服务器 URL (有此字段则自动识别为 HTTP 传输) */
   url: z.string().optional(),
-  /** 请求头（sse / streamable-http） */
+  /** HTTP 传输：请求头 */
   headers: z.record(z.string()).optional(),
-  /** 连接超时时间（毫秒） */
+  /** 显式指定传输类型（可选，通常自动推断） */
+  transport: z.enum(['stdio', 'sse', 'streamable-http']).optional(),
+  /** 连接超时时间（毫秒），Sophon 扩展字段 */
   timeout: z.number().positive().default(30_000),
-  /** 是否启用该 MCP 服务器 */
+  /** 是否启用该 MCP 服务器，Sophon 扩展字段 */
   enabled: z.boolean().default(true),
-});
-
-/** MCP 配置 Schema */
-const McpConfigSchema = z.object({
-  /** MCP 服务器列表，key 为服务器名称 */
-  servers: z.record(McpServerConfigSchema).default({}),
 });
 
 /** 顶层配置 Schema */
@@ -143,8 +153,13 @@ export const ConfigSchema = z.object({
   scheduler: SchedulerConfigSchema.default({}),
   /** 子代理配置 */
   subagent: SubagentConfigSchema.default({}),
-  /** MCP 配置 */
-  mcp: McpConfigSchema.default({}),
+  /**
+   * MCP 服务器配置（兼容 Cursor / Claude Desktop 格式）
+   * 
+   * 可直接将 Cursor 的 .cursor/mcp.json 中的 mcpServers 内容粘贴到此处。
+   * 也支持单独的 mcp.json 文件（自动加载）。
+   */
+  mcpServers: z.record(McpServerConfigSchema).default({}),
   /** 工作区目录 */
   workspaceDir: z.string().default('.'),
   /** 技能目录 */
@@ -162,5 +177,4 @@ export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 export type ChannelConfig = z.infer<typeof ChannelConfigSchema>;
 export type SchedulerConfig = z.infer<typeof SchedulerConfigSchema>;
 export type SubagentConfig = z.infer<typeof SubagentConfigSchema>;
-export type McpConfig = z.infer<typeof McpConfigSchema>;
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;

@@ -26,6 +26,13 @@ const DEFAULT_CONFIG_PATHS = [
   'sophon.config.json',
 ];
 
+/** MCP 配置文件路径列表（兼容 Cursor / Claude Desktop 格式） */
+const MCP_CONFIG_PATHS = [
+  'mcp.json',
+  '.cursor/mcp.json',
+  'config/mcp.json',
+];
+
 /**
  * 从文件加载原始 JSON 配置
  */
@@ -189,11 +196,74 @@ function deepMerge(target: Record<string, unknown>, source: Record<string, unkno
 }
 
 /**
+ * 加载独立的 MCP 配置文件
+ * 
+ * 支持 Cursor / Claude Desktop 格式的 mcp.json 文件：
+ * {
+ *   "mcpServers": {
+ *     "server-name": {
+ *       "command": "npx",
+ *       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"]
+ *     }
+ *   }
+ * }
+ * 
+ * 也向下兼容旧版 Sophon 格式 (mcp.servers):
+ * {
+ *   "mcp": {
+ *     "servers": { ... }
+ *   }
+ * }
+ */
+async function loadMcpConfig(): Promise<Record<string, unknown> | null> {
+  for (const mcpPath of MCP_CONFIG_PATHS) {
+    const absolutePath = resolve(mcpPath);
+    if (existsSync(absolutePath)) {
+      try {
+        const content = await readFile(absolutePath, 'utf-8');
+        const parsed = JSON.parse(content) as Record<string, unknown>;
+        log.info({ path: absolutePath }, '已加载 MCP 配置文件');
+
+        // 兼容 Cursor 格式: { mcpServers: { ... } }
+        if (parsed['mcpServers'] && typeof parsed['mcpServers'] === 'object') {
+          return parsed['mcpServers'] as Record<string, unknown>;
+        }
+
+        // 兼容旧版 Sophon 格式: { mcp: { servers: { ... } } }
+        const mcp = parsed['mcp'] as Record<string, unknown> | undefined;
+        if (mcp?.['servers'] && typeof mcp['servers'] === 'object') {
+          return mcp['servers'] as Record<string, unknown>;
+        }
+
+        // 如果文件本身就是 servers 字典 (顶层直接是服务器)
+        // 如: { "filesystem": { "command": "..." }, "another": { "url": "..." } }
+        const keys = Object.keys(parsed);
+        if (keys.length > 0 && keys.every(k => typeof parsed[k] === 'object' && parsed[k] !== null)) {
+          const firstServer = parsed[keys[0]!] as Record<string, unknown>;
+          if (firstServer['command'] || firstServer['url']) {
+            return parsed;
+          }
+        }
+
+        log.warn({ path: absolutePath }, 'MCP 配置文件格式无法识别，跳过');
+      } catch (err) {
+        log.warn(
+          { path: absolutePath, err },
+          '加载 MCP 配置文件失败，跳过',
+        );
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * 加载并验证配置
  * 
  * 1. 尝试从指定路径或默认路径加载配置文件
- * 2. 应用环境变量覆盖
- * 3. 使用 Zod Schema 验证
+ * 2. 加载独立的 mcp.json 文件（兼容 Cursor / Claude Desktop 格式）
+ * 3. 应用环境变量覆盖
+ * 4. 使用 Zod Schema 验证
  */
 export async function loadConfig(configPath?: string): Promise<Config> {
   // 首先加载 .env 文件
@@ -218,6 +288,34 @@ export async function loadConfig(configPath?: string): Promise<Config> {
 
     if (Object.keys(rawConfig).length === 0) {
       log.info('未找到配置文件，使用默认配置');
+    }
+  }
+
+  // 兼容旧格式: mcp.servers → mcpServers
+  const mcpLegacy = rawConfig['mcp'] as Record<string, unknown> | undefined;
+  if (mcpLegacy?.['servers'] && !rawConfig['mcpServers']) {
+    rawConfig['mcpServers'] = mcpLegacy['servers'];
+    delete rawConfig['mcp'];
+    log.debug('已将 mcp.servers 转换为 mcpServers 格式');
+  }
+
+  // 加载独立的 mcp.json 文件（仅在主配置中没有 mcpServers 或 mcpServers 为空时加载）
+  const existingMcpServers = rawConfig['mcpServers'] as Record<string, unknown> | undefined;
+  if (!existingMcpServers || Object.keys(existingMcpServers).length === 0) {
+    const externalMcpServers = await loadMcpConfig();
+    if (externalMcpServers) {
+      rawConfig['mcpServers'] = externalMcpServers;
+      log.debug(
+        { serverCount: Object.keys(externalMcpServers).length },
+        '已从外部 MCP 配置文件加载服务器',
+      );
+    }
+  } else {
+    // 主配置中已有 mcpServers，尝试合并外部配置
+    const externalMcpServers = await loadMcpConfig();
+    if (externalMcpServers) {
+      rawConfig['mcpServers'] = { ...externalMcpServers, ...existingMcpServers };
+      log.debug('已合并外部 MCP 配置文件（主配置优先）');
     }
   }
 

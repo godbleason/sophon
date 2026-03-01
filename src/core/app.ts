@@ -64,7 +64,7 @@ export class SophonApp {
     this.skillsLoader = new SkillsLoader(config.skillsDir);
     this.userStore = new UserStore({ storageDir: config.session.storageDir });
     this.spaceManager = new SpaceManager({ storageDir: config.session.storageDir });
-    this.mcpManager = new McpManager(config.mcp);
+    this.mcpManager = new McpManager(config.mcpServers);
 
     // 初始化定时任务调度器
     this.scheduler = new Scheduler(config.scheduler, this.messageBus, this.sessionManager);
