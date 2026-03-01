@@ -45,10 +45,22 @@ interface SessionMeta {
   channelData?: Record<string, unknown>;
 }
 
+/** 持久化的对话摘要 */
+interface SessionSummary {
+  /** 摘要正文 */
+  content: string;
+  /** 已被压缩（摘要化）的消息数量（从 history.jsonl 开头起算） */
+  compressedCount: number;
+  /** 最后更新时间 */
+  lastUpdated: number;
+}
+
 /** 会话数据 */
 interface Session {
   meta: SessionMeta;
   messages: ChatMessage[];
+  /** 对话摘要（压缩后的旧对话） */
+  summary?: SessionSummary;
 }
 
 /**
@@ -278,7 +290,11 @@ export class SessionManager {
   }
 
   /**
-   * 获取会话历史（受 memoryWindow 限制）
+   * 获取会话历史（受 memoryWindow 限制，包含摘要上下文）
+   *
+   * 如果存在对话摘要，会在返回的消息列表开头注入一条 system 消息，
+   * 告知 LLM 之前的对话概要。这确保 LLM 在有限的上下文窗口内
+   * 仍能理解早期对话中建立的关键信息。
    */
   getHistory(sessionId: string): ChatMessage[] {
     const session = this.sessions.get(sessionId);
@@ -287,12 +303,28 @@ export class SessionManager {
     }
 
     const { memoryWindow } = this.config;
-    if (session.messages.length <= memoryWindow) {
-      return [...session.messages];
+    const result: ChatMessage[] = [];
+
+    // 如果有摘要，注入为开头的 system 消息
+    if (session.summary?.content) {
+      result.push({
+        role: 'system',
+        content: `[Conversation Summary]\nThe following is a summary of the earlier conversation that is no longer in the context window:\n\n${session.summary.content}`,
+      });
     }
 
-    // 只返回最近的 N 条消息
-    return session.messages.slice(-memoryWindow);
+    // 计算剩余可用的消息槽位（预留 1 给摘要消息）
+    const availableSlots = session.summary?.content
+      ? memoryWindow - 1
+      : memoryWindow;
+
+    if (session.messages.length <= availableSlots) {
+      result.push(...session.messages);
+    } else {
+      result.push(...session.messages.slice(-availableSlots));
+    }
+
+    return result;
   }
 
   /**
@@ -307,12 +339,13 @@ export class SessionManager {
   }
 
   /**
-   * 清除会话（清空历史，保留目录）
+   * 清除会话（清空历史和摘要，保留目录）
    */
   async clearSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (session) {
       session.messages = [];
+      session.summary = undefined;
       session.meta.messageCount = 0;
       session.meta.updatedAt = Date.now();
 
@@ -320,8 +353,118 @@ export class SessionManager {
       const historyFile = this.getHistoryFilePath(sessionId);
       await this.ensureSessionDir(sessionId);
       await writeFile(historyFile, '', 'utf-8');
+
+      // 删除摘要文件
+      const summaryFile = this.getSummaryFilePath(sessionId);
+      if (existsSync(summaryFile)) {
+        await writeFile(summaryFile, '', 'utf-8');
+      }
       log.info({ sessionId }, '会话已清除');
     }
+  }
+
+  /**
+   * 获取会话摘要
+   */
+  getSummary(sessionId: string): SessionSummary | undefined {
+    return this.sessions.get(sessionId)?.summary;
+  }
+
+  /**
+   * 获取当前工作消息数（用于判断是否需要压缩）
+   */
+  getMessageCount(sessionId: string): number {
+    return this.sessions.get(sessionId)?.messages.length ?? 0;
+  }
+
+  /**
+   * 获取需要被压缩的消息
+   *
+   * 返回超出保留窗口的旧消息，确保不会在工具调用链中间截断。
+   * 保留最近的 keepRecent 条消息不被压缩。
+   *
+   * @returns 要被压缩的消息列表，如果不需要压缩则返回 null
+   */
+  getMessagesToCompress(sessionId: string, keepRecent: number): ChatMessage[] | null {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+
+    const total = session.messages.length;
+    if (total <= keepRecent) return null;
+
+    // 从后往前找到安全分割点（不要截断工具调用链）
+    let splitIndex = total - keepRecent;
+    splitIndex = this.findSafeSplitPoint(session.messages, splitIndex);
+
+    if (splitIndex <= 0) return null;
+
+    return session.messages.slice(0, splitIndex);
+  }
+
+  /**
+   * 执行压缩：用摘要替换旧消息
+   *
+   * @param sessionId 会话 ID
+   * @param summaryContent 新的摘要内容
+   * @param compressedMessageCount 本次被压缩的消息数量
+   */
+  async applyCompression(
+    sessionId: string,
+    summaryContent: string,
+    compressedMessageCount: number,
+  ): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    // 更新摘要
+    const prevCompressed = session.summary?.compressedCount ?? 0;
+    session.summary = {
+      content: summaryContent,
+      compressedCount: prevCompressed + compressedMessageCount,
+      lastUpdated: Date.now(),
+    };
+
+    // 从内存中移除已压缩的消息
+    session.messages = session.messages.slice(compressedMessageCount);
+    session.meta.messageCount = session.messages.length;
+    session.meta.updatedAt = Date.now();
+
+    // 持久化摘要
+    await this.saveSummary(sessionId, session.summary);
+
+    log.info(
+      {
+        sessionId,
+        compressedThisTime: compressedMessageCount,
+        totalCompressed: session.summary.compressedCount,
+        remainingMessages: session.messages.length,
+      },
+      '对话已压缩',
+    );
+  }
+
+  /**
+   * 找到安全的分割点，避免在工具调用链中间截断
+   *
+   * 工具调用链：assistant(toolCalls) + tool(result) + ... + tool(result)
+   * 这些消息必须保持在一起，不能拆分。
+   */
+  private findSafeSplitPoint(messages: ChatMessage[], targetIndex: number): number {
+    // 从 targetIndex 向前搜索安全分割点
+    let idx = targetIndex;
+
+    // 如果当前位置是 tool 消息，说明在工具调用链中间，需要向前找到链的开始
+    while (idx > 0 && messages[idx]?.role === 'tool') {
+      idx--;
+    }
+
+    // 如果当前位置是带 toolCalls 的 assistant 消息，整个链都应该保留
+    if (idx > 0 && messages[idx]?.role === 'assistant' && messages[idx]?.toolCalls?.length) {
+      idx--;
+    }
+
+    // 确保不会得到负数
+    return Math.max(0, idx);
   }
 
   /**
@@ -359,6 +502,13 @@ export class SessionManager {
     }
 
     return Array.from(found.values());
+  }
+
+  /**
+   * 获取记忆窗口大小
+   */
+  getMemoryWindow(): number {
+    return this.config.memoryWindow;
   }
 
   /**
@@ -432,6 +582,37 @@ export class SessionManager {
     return join(this.getSessionDir(sessionId), 'meta.json');
   }
 
+  /** 获取摘要文件路径 */
+  private getSummaryFilePath(sessionId: string): string {
+    return join(this.getSessionDir(sessionId), 'summary.json');
+  }
+
+  /** 加载对话摘要 */
+  private async loadSummary(sessionId: string): Promise<SessionSummary | null> {
+    const filePath = this.getSummaryFilePath(sessionId);
+    if (!existsSync(filePath)) return null;
+
+    try {
+      const content = await readFile(filePath, 'utf-8');
+      if (!content.trim()) return null;
+      return JSON.parse(content) as SessionSummary;
+    } catch (err) {
+      log.warn({ err, sessionId }, '加载摘要文件失败');
+      return null;
+    }
+  }
+
+  /** 持久化对话摘要 */
+  private async saveSummary(sessionId: string, summary: SessionSummary): Promise<void> {
+    await this.ensureSessionDir(sessionId);
+    const filePath = this.getSummaryFilePath(sessionId);
+    try {
+      await writeFile(filePath, JSON.stringify(summary, null, 2), 'utf-8');
+    } catch (err) {
+      log.error({ err, sessionId }, '保存摘要文件失败');
+    }
+  }
+
   /** 持久化 session 元数据到 meta.json */
   private async saveMetaFile(sessionId: string, meta: SessionMeta): Promise<void> {
     await this.ensureSessionDir(sessionId);
@@ -465,15 +646,28 @@ export class SessionManager {
     try {
       const content = await readFile(filePath, 'utf-8');
       const lines = content.split('\n').filter((line) => line.trim().length > 0);
-      const messages: ChatMessage[] = [];
+      const allMessages: ChatMessage[] = [];
 
       for (const line of lines) {
         try {
           const msg = JSON.parse(line) as ChatMessage;
-          messages.push(msg);
+          allMessages.push(msg);
         } catch {
           log.warn({ sessionId, line }, '跳过无效的消息行');
         }
+      }
+
+      // 加载摘要（如果存在，跳过已被压缩的消息）
+      const summary = await this.loadSummary(sessionId);
+      let messages: ChatMessage[];
+      if (summary && summary.compressedCount > 0 && summary.compressedCount <= allMessages.length) {
+        messages = allMessages.slice(summary.compressedCount);
+        log.info(
+          { sessionId, total: allMessages.length, compressed: summary.compressedCount, remaining: messages.length },
+          '已加载摘要，跳过已压缩的消息',
+        );
+      } else {
+        messages = allMessages;
       }
 
       return {
@@ -485,6 +679,7 @@ export class SessionManager {
           messageCount: messages.length,
         },
         messages,
+        summary: summary ?? undefined,
       };
     } catch (err) {
       throw new SessionError(

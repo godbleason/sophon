@@ -355,6 +355,11 @@ export class AgentLoop {
           text: response,
           timestamp: Date.now(),
         });
+
+        // 对话轮结束后，检查是否需要压缩历史
+        this.maybeCompressHistory(sessionId).catch((err) => {
+          log.error({ err, sessionId }, '压缩对话历史失败');
+        });
     }
   }
 
@@ -468,6 +473,151 @@ You have access to a persistent memory system. Use it proactively:
     }
 
     return prompt;
+  }
+
+  // ─── 对话压缩 ───
+
+  /**
+   * 检查并执行对话历史压缩
+   *
+   * 当工作消息数超过 memoryWindow 时触发，使用 LLM 将较早的对话
+   * 总结为一段摘要，然后从内存中移除已压缩的消息。
+   *
+   * 压缩策略：
+   * - 触发条件：消息数 > memoryWindow
+   * - 保留最近 60% memoryWindow 的消息不压缩
+   * - 其余消息（加上已有摘要）由 LLM 总结为新摘要
+   * - 确保不在工具调用链中间截断
+   */
+  private async maybeCompressHistory(sessionId: string): Promise<void> {
+    const memoryWindow = this.sessionManager.getMemoryWindow();
+    const messageCount = this.sessionManager.getMessageCount(sessionId);
+
+    if (messageCount <= memoryWindow) {
+      return; // 未超出窗口，无需压缩
+    }
+
+    // 保留最近 60% 的消息
+    const keepRecent = Math.floor(memoryWindow * 0.6);
+    const toCompress = this.sessionManager.getMessagesToCompress(sessionId, keepRecent);
+
+    if (!toCompress || toCompress.length === 0) {
+      return;
+    }
+
+    log.info(
+      { sessionId, totalMessages: messageCount, toCompress: toCompress.length, keepRecent },
+      '开始压缩对话历史',
+    );
+
+    // 获取已有摘要（如果有的话，需要合并到新摘要中）
+    const existingSummary = this.sessionManager.getSummary(sessionId);
+
+    // 使用 LLM 生成摘要
+    const summaryContent = await this.summarizeMessages(toCompress, existingSummary?.content);
+
+    // 应用压缩
+    await this.sessionManager.applyCompression(sessionId, summaryContent, toCompress.length);
+
+    log.info(
+      { sessionId, summaryLength: summaryContent.length },
+      '对话历史压缩完成',
+    );
+  }
+
+  /**
+   * 使用 LLM 将消息列表总结为摘要
+   *
+   * @param messages 要总结的消息列表
+   * @param existingSummary 已有的摘要（会合并到新摘要中）
+   * @returns 生成的摘要文本
+   */
+  private async summarizeMessages(
+    messages: ChatMessage[],
+    existingSummary?: string,
+  ): Promise<string> {
+    const systemPrompt = `You are a conversation summarizer. Your task is to create a concise but comprehensive summary of the conversation provided.
+
+## Rules
+1. Preserve all important factual information: names, dates, numbers, decisions, preferences, and key details.
+2. Preserve the context of tool usage: what tools were called, why, and what the results were (summarize results, don't include raw output).
+3. Preserve the user's intent and any ongoing tasks or commitments.
+4. Organize the summary clearly with bullet points or short paragraphs.
+5. Write in the same language as the conversation.
+6. Be concise — aim for a summary that is roughly 10-20% the length of the original conversation.
+7. Do NOT include any preamble like "Here is a summary". Just output the summary directly.`;
+
+    // 构建要总结的内容
+    const parts: string[] = [];
+
+    if (existingSummary) {
+      parts.push(`[Previous Summary]\n${existingSummary}\n`);
+    }
+
+    parts.push('[Conversation to Summarize]');
+    for (const msg of messages) {
+      if (msg.role === 'system') continue; // 跳过系统消息
+
+      if (msg.role === 'user') {
+        parts.push(`User: ${msg.content}`);
+      } else if (msg.role === 'assistant') {
+        if (msg.toolCalls?.length) {
+          const toolNames = msg.toolCalls.map((tc) => tc.name).join(', ');
+          const textPart = msg.content ? `${msg.content}\n` : '';
+          parts.push(`Assistant: ${textPart}[Called tools: ${toolNames}]`);
+        } else {
+          parts.push(`Assistant: ${msg.content}`);
+        }
+      } else if (msg.role === 'tool') {
+        // 截断过长的工具结果
+        const result = (msg.content || '').length > 500
+          ? msg.content!.substring(0, 500) + '...(truncated)'
+          : msg.content;
+        parts.push(`Tool(${msg.name}): ${result}`);
+      }
+    }
+
+    const userMessage: ChatMessage = {
+      role: 'user',
+      content: parts.join('\n'),
+    };
+
+    try {
+      const response = await this.provider.chat({
+        model: this.config.model,
+        messages: [userMessage],
+        temperature: 0.3, // 低温度以确保摘要准确
+        maxTokens: 1024,
+        systemPrompt,
+      });
+
+      return response.content || '(Summary generation failed)';
+    } catch (err) {
+      log.error({ err }, 'LLM 摘要生成失败');
+      // 降级：生成一个简单的基于规则的摘要
+      return this.fallbackSummarize(messages, existingSummary);
+    }
+  }
+
+  /**
+   * 降级摘要：当 LLM 调用失败时使用
+   *
+   * 简单提取 user 和 assistant 的最终文本消息。
+   */
+  private fallbackSummarize(messages: ChatMessage[], existingSummary?: string): string {
+    const parts: string[] = [];
+    if (existingSummary) {
+      parts.push(existingSummary);
+      parts.push('');
+    }
+    for (const msg of messages) {
+      if (msg.role === 'user' && msg.content) {
+        parts.push(`- User: ${msg.content.substring(0, 200)}`);
+      } else if (msg.role === 'assistant' && msg.content && !msg.toolCalls?.length) {
+        parts.push(`- Assistant: ${msg.content.substring(0, 200)}`);
+      }
+    }
+    return parts.join('\n');
   }
 
   /**
