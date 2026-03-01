@@ -726,7 +726,11 @@
           sendBtn.disabled = false;
           inputEl.focus();
           // 重连时先清空已有消息，避免历史消息重复追加
-          messagesEl.innerHTML = '';
+          // 保留 typingIndicator，只移除其他子元素
+          while (messagesEl.firstChild) {
+            if (messagesEl.firstChild === typingIndicator) break;
+            messagesEl.removeChild(messagesEl.firstChild);
+          }
           currentProgressEl = null;
           progressStepCount = 0;
           // 如果服务端返回了历史消息，恢复显示
