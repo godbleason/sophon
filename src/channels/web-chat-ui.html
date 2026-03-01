@@ -725,6 +725,10 @@
           statusText.textContent = '已连接';
           sendBtn.disabled = false;
           inputEl.focus();
+          // 重连时先清空已有消息，避免历史消息重复追加
+          messagesEl.innerHTML = '';
+          currentProgressEl = null;
+          progressStepCount = 0;
           // 如果服务端返回了历史消息，恢复显示
           if (data.history && data.history.length > 0) {
             if (welcomeEl) welcomeEl.style.display = 'none';
@@ -735,6 +739,9 @@
               }
               addMessage(msg.role, msg.content);
             }
+          } else if (welcomeEl) {
+            // 没有历史消息时恢复欢迎界面
+            welcomeEl.style.display = '';
           }
           break;
         case 'progress':
