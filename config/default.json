@@ -48,6 +48,11 @@
     "maxTokens": 4096,
     "toolBlacklist": ["spawn", "subagent_status", "cancel_subagent"]
   },
-  "mcpServers": {},
+  "mcpServers": {
+    "excel": {
+        "command": "uvx",
+        "args": ["excel-mcp-server", "stdio"]
+    }
+  },
   "logLevel": "info"
 }

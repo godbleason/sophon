@@ -221,14 +221,6 @@ export async function loadConfig(configPath?: string): Promise<Config> {
     }
   }
 
-  // 兼容旧格式: mcp.servers → mcpServers
-  const mcpLegacy = rawConfig['mcp'] as Record<string, unknown> | undefined;
-  if (mcpLegacy?.['servers'] && !rawConfig['mcpServers']) {
-    rawConfig['mcpServers'] = mcpLegacy['servers'];
-    delete rawConfig['mcp'];
-    log.debug('已将 mcp.servers 转换为 mcpServers 格式');
-  }
-
   // 应用环境变量覆盖
   const envOverrides = getEnvOverrides();
   if (Object.keys(envOverrides).length > 0) {
