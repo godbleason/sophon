@@ -19,6 +19,11 @@ import {
 } from './spawn-tool.js';
 import { SendMessageTool } from './message-tool.js';
 import { WebSearchTool, FetchUrlTool } from './web-tool.js';
+import {
+  UpdateMemoryTool,
+  AppendHistoryTool,
+  SearchHistoryTool,
+} from './memory-tool.js';
 
 /**
  * 获取所有内置工具
@@ -40,6 +45,9 @@ export function getBuiltinTools(): Tool[] {
     new SendMessageTool(),
     new WebSearchTool(),
     new FetchUrlTool(),
+    new UpdateMemoryTool(),
+    new AppendHistoryTool(),
+    new SearchHistoryTool(),
   ];
 }
 
@@ -59,4 +67,7 @@ export {
   SendMessageTool,
   WebSearchTool,
   FetchUrlTool,
+  UpdateMemoryTool,
+  AppendHistoryTool,
+  SearchHistoryTool,
 };

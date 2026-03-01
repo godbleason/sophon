@@ -19,6 +19,7 @@ import { getBuiltinTools } from '../tools/index.js';
 import { setScheduler } from '../tools/schedule-tool.js';
 import { setSubagentManager } from '../tools/spawn-tool.js';
 import { setMessageToolDeps } from '../tools/message-tool.js';
+import { setMemoryToolDeps } from '../tools/memory-tool.js';
 import { MemoryStore } from '../memory/memory-store.js';
 import { SkillsLoader } from '../skills/skills-loader.js';
 import { UserStore } from './user-store.js';
@@ -95,6 +96,9 @@ export class SophonApp {
       spaceManager: this.spaceManager,
       userStore: this.userStore,
     });
+
+    // 注入记忆工具依赖
+    setMemoryToolDeps(this.memoryStore);
 
     // 创建 Agent Loop
     this.agentLoop = new AgentLoop({
