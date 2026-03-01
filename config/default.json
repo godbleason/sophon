@@ -49,9 +49,9 @@
     "toolBlacklist": ["spawn", "subagent_status", "cancel_subagent"]
   },
   "mcpServers": {
-    "excel": {
-        "command": "uvx",
-        "args": ["excel-mcp-server", "stdio"]
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/"
     }
   },
   "logLevel": "info"
