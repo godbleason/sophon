@@ -45,7 +45,7 @@ export function MessageList({
   }
 
   return (
-    <ScrollArea className="flex-1">
+    <ScrollArea className="flex-1 min-h-0">
       <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
         {messages.map((msg) => {
           // system 消息带 thinkingSteps = 折叠的思考过程

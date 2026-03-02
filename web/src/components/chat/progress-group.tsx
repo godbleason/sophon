@@ -17,9 +17,9 @@ export function HistoryProgressGroup({ message }: { message: ChatMessage }) {
   if (steps.length === 0) return null
 
   return (
-    <div className="max-w-[85%]">
+    <div className="max-w-[85%] group">
       <Collapsible open={open} onOpenChange={setOpen}>
-        <CollapsibleTrigger className="group flex items-center gap-2 px-3.5 py-2 bg-secondary border border-border rounded-xl text-xs text-muted-foreground cursor-pointer select-none transition-colors hover:text-secondary-foreground hover:border-ring w-full data-[state=open]:rounded-b-none data-[state=open]:border-b-0">
+        <CollapsibleTrigger className="flex items-center gap-2 px-3.5 py-2 bg-secondary border border-border rounded-xl text-xs text-muted-foreground cursor-pointer select-none transition-colors group-hover:text-secondary-foreground group-hover:border-ring w-full data-[state=open]:rounded-b-none data-[state=open]:border-b-0">
           <ChevronRight
             className={cn(
               'h-3 w-3 transition-transform duration-200',
@@ -28,7 +28,7 @@ export function HistoryProgressGroup({ message }: { message: ChatMessage }) {
           />
           <span>{message.content}</span>
         </CollapsibleTrigger>
-        <CollapsibleContent className="bg-secondary border border-border border-t-0 rounded-b-xl px-3.5 py-3 space-y-2 text-xs text-muted-foreground transition-colors [&:hover]:border-ring group-hover:border-ring">
+        <CollapsibleContent className="bg-secondary border border-border border-t-0 rounded-b-xl px-3.5 py-3 space-y-2 text-xs text-muted-foreground transition-colors group-hover:border-ring">
           {steps.map((step, i) => (
             <StepItem key={i} step={step} />
           ))}
@@ -53,9 +53,9 @@ export function LiveProgressGroup({ steps }: { steps: ProgressStep[] }) {
   }
 
   return (
-    <div className="max-w-[85%]">
+    <div className="max-w-[85%] group">
       <Collapsible open={open} onOpenChange={setOpen}>
-        <CollapsibleTrigger className="group flex items-center gap-2 px-3.5 py-2 bg-secondary border border-border rounded-xl text-xs text-muted-foreground cursor-pointer select-none transition-colors hover:text-secondary-foreground hover:border-ring w-full data-[state=open]:rounded-b-none data-[state=open]:border-b-0">
+        <CollapsibleTrigger className="flex items-center gap-2 px-3.5 py-2 bg-secondary border border-border rounded-xl text-xs text-muted-foreground cursor-pointer select-none transition-colors group-hover:text-secondary-foreground group-hover:border-ring w-full data-[state=open]:rounded-b-none data-[state=open]:border-b-0">
           <ChevronRight
             className={cn(
               'h-3 w-3 transition-transform duration-200',
@@ -64,7 +64,7 @@ export function LiveProgressGroup({ steps }: { steps: ProgressStep[] }) {
           />
           <span>{summary}</span>
         </CollapsibleTrigger>
-        <CollapsibleContent className="bg-secondary border border-border border-t-0 rounded-b-xl px-3.5 py-3 space-y-2 text-xs text-muted-foreground max-h-[300px] overflow-y-auto">
+        <CollapsibleContent className="bg-secondary border border-border border-t-0 rounded-b-xl px-3.5 py-3 space-y-2 text-xs text-muted-foreground max-h-[300px] overflow-y-auto transition-colors group-hover:border-ring">
           {steps.map((step) => (
             <LiveStepItem key={step.id} step={step} />
           ))}

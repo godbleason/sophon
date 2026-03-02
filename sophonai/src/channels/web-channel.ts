@@ -41,6 +41,8 @@ interface ClientConnection {
   connectedAt: number;
   /** 是否已完成身份识别 */
   identified: boolean;
+  /** 是否响应了最近的 ping（用于心跳检测） */
+  alive: boolean;
 }
 
 /**
@@ -63,6 +65,8 @@ export class WebChannel implements Channel {
   private readonly host: string;
   private httpServer: Server | null = null;
   private wsServer: WebSocketServer | null = null;
+  /** 心跳定时器 */
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   /** 所有活跃连接，key = 内部连接 ID（随机） */
   private readonly clients = new Map<string, ClientConnection>();
 
@@ -88,6 +92,20 @@ export class WebChannel implements Channel {
     this.wsServer = new WebSocketServer({ server: this.httpServer });
     this.wsServer.on('connection', this.handleWsConnection.bind(this));
 
+    // 启动心跳检测（每 30 秒 ping 一次，未响应则断开）
+    this.heartbeatTimer = setInterval(() => {
+      for (const [connId, client] of this.clients) {
+        if (!client.alive) {
+          log.debug({ connId }, '心跳超时，断开连接');
+          client.ws.terminate();
+          this.clients.delete(connId);
+          continue;
+        }
+        client.alive = false;
+        client.ws.ping();
+      }
+    }, 30_000);
+
     // 启动监听
     await new Promise<void>((resolve, reject) => {
       this.httpServer!.listen(this.port, this.host, () => {
@@ -100,6 +118,12 @@ export class WebChannel implements Channel {
   }
 
   async stop(): Promise<void> {
+    // 停止心跳
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+
     // 关闭所有 WebSocket 连接
     for (const [id, client] of this.clients) {
       client.ws.close(1000, '服务器关闭');
@@ -187,10 +211,16 @@ export class WebChannel implements Channel {
       sessionId: '', // 等待 identify
       connectedAt: Date.now(),
       identified: false,
+      alive: true,
     };
 
     this.clients.set(connId, client);
     log.debug({ connId }, 'WebSocket 连接已建立，等待身份识别');
+
+    // 收到 pong 时标记连接存活
+    ws.on('pong', () => {
+      client.alive = true;
+    });
 
     // 设置身份识别超时（10 秒内必须发送 identify）
     const identifyTimeout = setTimeout(() => {

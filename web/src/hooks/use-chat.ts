@@ -13,12 +13,15 @@ export function useChat() {
   const [isWaiting, setIsWaiting] = useState(false)
   const [showWelcome, setShowWelcome] = useState(true)
   const progressCountRef = useRef(0)
+  // 用 ref 镜像 progressSteps，避免在 state updater 内产生副作用
+  const progressStepsRef = useRef<ProgressStep[]>([])
 
   const handleServerMessage = useCallback((data: ServerMessage) => {
     switch (data.type) {
       case 'connected': {
         setMessages([])
         setProgressSteps([])
+        progressStepsRef.current = []
         progressCountRef.current = 0
 
         if (data.history && data.history.length > 0) {
@@ -60,10 +63,12 @@ export function useChat() {
         s.isActive ? { ...s, isActive: false, icon: s.icon === '⏳' ? '✅' : s.icon } : s,
       )
 
+      let next: ProgressStep[]
+
       switch (data.step) {
         case 'thinking': {
           progressCountRef.current++
-          return [
+          next = [
             ...updated,
             {
               id: crypto.randomUUID(),
@@ -73,11 +78,12 @@ export function useChat() {
               isActive: true,
             },
           ]
+          break
         }
         case 'tool_call': {
           progressCountRef.current++
           const argsStr = data.toolArgs ? JSON.stringify(data.toolArgs, null, 2) : ''
-          return [
+          next = [
             ...updated,
             {
               id: crypto.randomUUID(),
@@ -90,10 +96,11 @@ export function useChat() {
               isActive: true,
             },
           ]
+          break
         }
         case 'tool_result': {
           // 找到对应的 tool_call 步骤并更新
-          const resultUpdated = updated.map((s) => {
+          next = updated.map((s) => {
             if (s.toolCallId === data.toolCallId) {
               return {
                 ...s,
@@ -105,12 +112,12 @@ export function useChat() {
             }
             return s
           })
-          return resultUpdated
+          break
         }
         case 'llm_response': {
           if (data.content) {
             progressCountRef.current++
-            return [
+            next = [
               ...updated,
               {
                 id: crypto.randomUUID(),
@@ -120,38 +127,38 @@ export function useChat() {
                 isActive: false,
               },
             ]
+          } else {
+            next = updated
           }
-          return updated
+          break
         }
         default:
-          return updated
+          next = updated
       }
+
+      // 同步更新 ref
+      progressStepsRef.current = next
+      return next
     })
   }, [])
 
   const finalizeProgress = useCallback(() => {
-    setProgressSteps((prev) => {
-      if (prev.length === 0) return prev
+    // 从 ref 读取当前进度，避免在 state updater 内调用 setMessages（StrictMode 下会被调用两次）
+    const prev = progressStepsRef.current
+    if (prev.length === 0) return
 
-      // 标记所有 active 为完成
-      const finalized = prev.map((s) =>
-        s.isActive ? { ...s, isActive: false, icon: s.icon === '⏳' ? '✅' : s.icon } : s,
-      )
+    // 标记所有 active 为完成
+    const finalized = prev.map((s) =>
+      s.isActive ? { ...s, isActive: false, icon: s.icon === '⏳' ? '✅' : s.icon } : s,
+    )
 
-      // 检查是否有工具调用
-      const hasToolCalls = finalized.some((s) => s.type === 'tool_call')
-      if (!hasToolCalls) {
-        // 没有工具调用（只有 thinking），不生成思考过程消息
-        progressCountRef.current = 0
-        return []
-      }
-
-      // 生成一条带思考步骤的占位消息插入到消息列表中
+    // 检查是否有工具调用
+    const hasToolCalls = finalized.some((s) => s.type === 'tool_call')
+    if (hasToolCalls) {
       const toolCalls = finalized.filter((s) => s.type === 'tool_call')
       const uniqueNames = [...new Set(toolCalls.map((s) => s.toolName).filter(Boolean))]
       const summaryText = `🧠 思考过程 · ${toolCalls.length} 次工具调用${uniqueNames.length > 0 ? ` (${uniqueNames.join(', ')})` : ''}`
 
-      // 将 progress steps 转为 thinking steps 并附加到即将到来的 assistant 消息
       const thinkingSteps = finalized
         .filter((s) => s.type === 'tool_call' || s.type === 'tool_result')
         .map((s) => ({
@@ -162,7 +169,7 @@ export function useChat() {
           isError: s.isError,
         }))
 
-      // 插入一条 progress 消息
+      // 在 state updater 外部调用 setMessages，避免 StrictMode 重复执行
       setMessages((msgs) => [
         ...msgs,
         {
@@ -172,10 +179,12 @@ export function useChat() {
           thinkingSteps,
         },
       ])
+    }
 
-      progressCountRef.current = 0
-      return []
-    })
+    // 清空进度
+    progressStepsRef.current = []
+    setProgressSteps([])
+    progressCountRef.current = 0
   }, [])
 
   const { status, disconnectReason, send } = useWebSocket({

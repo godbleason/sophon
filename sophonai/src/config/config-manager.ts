@@ -237,5 +237,29 @@ export async function loadConfig(configPath?: string): Promise<Config> {
     throw new ConfigError('配置验证失败', { errors });
   }
 
-  return parseResult.data;
+  const config = parseResult.data;
+
+  // 如果指定了 systemPromptFile，从文件读取系统提示词（优先级高于内联 systemPrompt）
+  if (config.agent.systemPromptFile) {
+    const promptFilePath = resolve(config.agent.systemPromptFile);
+    if (!existsSync(promptFilePath)) {
+      throw new ConfigError(
+        `系统提示词文件不存在: ${promptFilePath}`,
+        { path: promptFilePath },
+      );
+    }
+    try {
+      const promptContent = await readFile(promptFilePath, 'utf-8');
+      config.agent.systemPrompt = promptContent.trim();
+      log.info({ path: promptFilePath }, '已从文件加载系统提示词');
+    } catch (err) {
+      throw new ConfigError(
+        `系统提示词文件读取失败: ${promptFilePath}`,
+        { path: promptFilePath },
+        { cause: err as Error },
+      );
+    }
+  }
+
+  return config;
 }

@@ -19,7 +19,6 @@ export default function App() {
       <ChatHeader
         status={status}
         disconnectReason={disconnectReason}
-        onCommand={sendMessage}
       />
 
       <MessageList

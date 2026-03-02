@@ -11,13 +11,6 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  server: {
-    // 开发时代理 WebSocket 到后端
-    proxy: {
-      '/': {
-        target: 'ws://localhost:3000',
-        ws: true,
-      },
-    },
-  },
+  // 开发模式下通过 .env.development 中的 VITE_WS_URL 直接连接后端 WebSocket
+  // 生产构建时通过 VITE_WS_URL 环境变量注入后端地址
 })
